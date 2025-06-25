@@ -1,5 +1,6 @@
 import { useNostr } from '@nostrify/react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import type { NostrEvent } from '@nostrify/nostrify';
 
 /**
@@ -60,12 +61,15 @@ export function useNest(naddr: string | undefined) {
 }
 
 /**
- * Hook to fetch nest chat messages (kind 1311)
+ * Hook to fetch nest chat messages (kind 1311) with live updates
  */
 export function useNestChat(nestNaddr: string | undefined) {
   const { nostr } = useNostr();
+  const queryClient = useQueryClient();
+  const lastMessageTimeRef = useRef<number>(0);
 
-  return useQuery({
+  // Query with automatic refetching for live updates
+  const query = useQuery({
     queryKey: ['nest-chat', nestNaddr],
     queryFn: async (c) => {
       if (!nestNaddr) return [];
@@ -77,11 +81,73 @@ export function useNestChat(nestNaddr: string | undefined) {
         limit: 100 
       }], { signal });
       
-      // Sort by created_at (newest first)
-      return events.sort((a, b) => b.created_at - a.created_at);
+      // Update the last message time for incremental updates
+      if (events.length > 0) {
+        lastMessageTimeRef.current = Math.max(...events.map(e => e.created_at));
+      }
+      
+      // Sort by created_at (oldest first for chat display)
+      return events.sort((a, b) => a.created_at - b.created_at);
     },
     enabled: !!nestNaddr,
+    refetchInterval: 2000, // Refetch every 2 seconds for live updates
+    refetchIntervalInBackground: true, // Continue refetching when tab is not active
   });
+
+  // Additional polling for very recent messages (last 30 seconds)
+  useEffect(() => {
+    if (!nestNaddr || !nostr) return;
+
+    const pollForNewMessages = async () => {
+      try {
+        const thirtySecondsAgo = Math.floor(Date.now() / 1000) - 30;
+        const since = Math.max(lastMessageTimeRef.current, thirtySecondsAgo);
+        
+        const signal = AbortSignal.timeout(1000);
+        const newEvents = await nostr.query([{
+          kinds: [1311],
+          '#a': [nestNaddr],
+          since: since
+        }], { signal });
+
+        if (newEvents.length > 0) {
+          // Update the query cache with new messages
+          queryClient.setQueryData(['nest-chat', nestNaddr], (oldData: NostrEvent[] | undefined) => {
+            if (!oldData) return newEvents.sort((a, b) => a.created_at - b.created_at);
+            
+            // Merge new messages with existing ones, avoiding duplicates
+            const existingIds = new Set(oldData.map(msg => msg.id));
+            const uniqueNewEvents = newEvents.filter(event => !existingIds.has(event.id));
+            
+            if (uniqueNewEvents.length === 0) return oldData;
+            
+            // Add new messages and keep sorted by created_at
+            const newData = [...oldData, ...uniqueNewEvents].sort((a, b) => a.created_at - b.created_at);
+            
+            // Update last message time
+            lastMessageTimeRef.current = Math.max(...newData.map(e => e.created_at));
+            
+            // Keep only the last 100 messages to prevent memory issues
+            return newData.slice(-100);
+          });
+        }
+      } catch (error) {
+        // Silently handle errors to avoid spamming console
+        if (error instanceof Error && !error.message.includes('timeout')) {
+          console.warn('Chat polling error:', error);
+        }
+      }
+    };
+
+    // Poll every 3 seconds for new messages
+    const interval = setInterval(pollForNewMessages, 3000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [nestNaddr, nostr, queryClient]);
+
+  return query;
 }
 
 /**

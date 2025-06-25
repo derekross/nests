@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Room, RoomEvent, RemoteParticipant, LocalParticipant, Track } from 'livekit-client';
+import { Room, RoomEvent, RemoteParticipant, LocalParticipant, Track, DisconnectReason } from 'livekit-client';
 
 interface LiveKitConfig {
   serverUrl: string;
@@ -35,7 +35,19 @@ export function useLiveKit(): UseLiveKitReturn {
 
 
   const connect = useCallback(async (config: LiveKitConfig) => {
-    if (isConnecting || isConnected) return;
+    if (isConnecting) return;
+    
+    // If already connected, disconnect first
+    if (isConnected && room) {
+      room.disconnect();
+      setRoom(null);
+      setIsConnected(false);
+      setParticipants([]);
+      setIsMicrophoneEnabled(false);
+      setRaisedHands(new Set());
+      setIsHandRaised(false);
+      setError(null);
+    }
     
     console.log('LiveKit connecting with config:', {
       serverUrl: config.serverUrl,
@@ -65,12 +77,16 @@ export function useLiveKit(): UseLiveKitReturn {
         setIsConnecting(false);
       });
       
-      newRoom.on(RoomEvent.Disconnected, (reason) => {
+      newRoom.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
         console.log('LiveKit room disconnected:', reason);
         setIsConnected(false);
         setParticipants([]);
         setRaisedHands(new Set());
         setIsHandRaised(false);
+        // Set error message for unexpected disconnections
+        if (reason && reason !== DisconnectReason.CLIENT_INITIATED) {
+          setError('Connection lost. You may need to rejoin.');
+        }
       });
       
       newRoom.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
@@ -158,7 +174,7 @@ export function useLiveKit(): UseLiveKitReturn {
       setError(err instanceof Error ? err.message : 'Failed to connect to room');
       setIsConnecting(false);
     }
-  }, [isConnecting, isConnected]);
+  }, [isConnecting, isConnected, room]);
 
   const disconnect = useCallback(() => {
     if (room) {

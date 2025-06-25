@@ -63,26 +63,26 @@ export function NestCard({ nest, onJoin }: NestCardProps) {
   const isJoinable = status === 'live' || status === 'open';
 
   return (
-    <Card className="hover:shadow-lg hover:shadow-primary/10 transition-all duration-200 border-primary/10 hover:border-primary/20">
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
+    <Card className="hover:shadow-lg hover:shadow-primary/10 transition-all duration-200 border-primary/10 hover:border-primary/20 h-full flex flex-col">
+      <CardHeader className="pb-3 flex-shrink-0">
+        <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-2">
-              <Badge variant="secondary" className={`${getStatusColor(status)} text-white`}>
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <Badge variant="secondary" className={`${getStatusColor(status)} text-white text-xs`}>
                 {getStatusText(status)}
               </Badge>
               {status === 'live' && (
-                <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Mic className="h-3 w-3" />
                   <span>Live</span>
                 </div>
               )}
             </div>
-            <h3 className="font-semibold text-lg leading-tight mb-1 truncate">
+            <h3 className="font-semibold text-base sm:text-lg leading-tight mb-1 line-clamp-2">
               {room}
             </h3>
             {summary && (
-              <p className="text-sm text-muted-foreground line-clamp-2">
+              <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2">
                 {summary}
               </p>
             )}
@@ -91,32 +91,32 @@ export function NestCard({ nest, onJoin }: NestCardProps) {
             <img 
               src={image} 
               alt={room}
-              className="w-16 h-16 rounded-lg object-cover ml-3 flex-shrink-0"
+              className="w-12 h-12 sm:w-16 sm:h-16 rounded-lg object-cover flex-shrink-0"
             />
           )}
         </div>
       </CardHeader>
       
-      <CardContent className="pt-0">
-        <div className="space-y-3">
+      <CardContent className="pt-0 flex-1 flex flex-col">
+        <div className="space-y-3 flex-1">
           {/* Host info */}
           <div className="flex items-center gap-2">
-            <Avatar className="h-6 w-6">
+            <Avatar className="h-5 w-5 sm:h-6 sm:w-6 flex-shrink-0">
               <AvatarImage src={hostAvatar} />
               <AvatarFallback className="text-xs">
                 {hostName.slice(0, 2).toUpperCase()}
               </AvatarFallback>
             </Avatar>
-            <span className="text-sm text-muted-foreground">
+            <span className="text-xs sm:text-sm text-muted-foreground truncate">
               {hostRole}: {hostName}
             </span>
           </div>
 
           {/* Participant count */}
           {(currentParticipants || totalParticipants) && (
-            <div className="flex items-center gap-1 text-sm text-muted-foreground">
-              <Users className="h-4 w-4" />
-              <span>
+            <div className="flex items-center gap-1 text-xs sm:text-sm text-muted-foreground">
+              <Users className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
+              <span className="truncate">
                 {currentParticipants && totalParticipants 
                   ? `${currentParticipants}/${totalParticipants} participants`
                   : currentParticipants 
@@ -142,17 +142,18 @@ export function NestCard({ nest, onJoin }: NestCardProps) {
               )}
             </div>
           )}
-
-          {/* Join button */}
-          <Button 
-            onClick={() => onJoin(nestNaddr)}
-            disabled={!isJoinable}
-            className={`w-full ${isJoinable ? 'bg-gradient-purple hover:opacity-90 glow-purple' : ''}`}
-            variant={isJoinable ? "default" : "secondary"}
-          >
-            {isJoinable ? 'Join Nest' : 'Nest Closed'}
-          </Button>
         </div>
+
+        {/* Join button */}
+        <Button 
+          onClick={() => onJoin(nestNaddr)}
+          disabled={!isJoinable}
+          className={`w-full mt-4 touch-target ${isJoinable ? 'bg-gradient-purple hover:opacity-90 glow-purple' : ''}`}
+          variant={isJoinable ? "default" : "secondary"}
+          size="sm"
+        >
+          {isJoinable ? 'Join Nest' : 'Nest Closed'}
+        </Button>
       </CardContent>
     </Card>
   );

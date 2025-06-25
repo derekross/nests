@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -36,12 +36,31 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   const [showChat, setShowChat] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   
   const { user } = useCurrentUser();
   const { mutate: createEvent } = useNostrPublish();
   const { toast } = useToast();
   const { data: nest } = useNest(nestNaddr);
   const { data: chatMessages = [] } = useNestChat(nestNaddr);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      const scrollElement = chatScrollRef.current;
+      const isScrolledToBottom = scrollElement.scrollHeight - scrollElement.clientHeight <= scrollElement.scrollTop + 1;
+      
+      // Only auto-scroll if user is already at the bottom (don't interrupt reading)
+      if (isScrolledToBottom || chatMessages.length === 1) {
+        setTimeout(() => {
+          scrollElement.scrollTo({
+            top: scrollElement.scrollHeight,
+            behavior: 'smooth'
+          });
+        }, 100);
+      }
+    }
+  }, [chatMessages]);
   
   const {
     isConnected,
@@ -225,7 +244,8 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
         token = response.token;
       } else if (response.token && typeof response.token === 'object') {
         // If it's an object, try to extract the JWT string
-        token = response.token.jwt || response.token.token || JSON.stringify(response.token);
+        const tokenObj = response.token as Record<string, unknown>;
+        token = (tokenObj.jwt as string) || (tokenObj.token as string) || JSON.stringify(response.token);
       } else {
         throw new Error('Invalid token received from restart API');
       }
@@ -480,16 +500,33 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
         {showChat && (
           <div className="w-80 border-l flex flex-col">
             <div className="p-4 border-b">
-              <h3 className="font-semibold">Chat</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold">Chat</h3>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                  <span className="text-xs text-muted-foreground">Live</span>
+                </div>
+              </div>
             </div>
             
-            <ScrollArea className="flex-1 p-4">
-              <div className="space-y-4">
-                {chatMessages.map((message) => (
-                  <ChatMessage key={message.id} message={message} />
-                ))}
+            <div className="flex-1 overflow-hidden">
+              <div 
+                ref={chatScrollRef}
+                className="h-full overflow-y-auto p-4 space-y-4"
+              >
+                {chatMessages.length === 0 ? (
+                  <div className="text-center text-muted-foreground py-8">
+                    <MessageCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">No messages yet</p>
+                    <p className="text-xs">Start the conversation!</p>
+                  </div>
+                ) : (
+                  chatMessages.map((message) => (
+                    <ChatMessage key={message.id} message={message} />
+                  ))
+                )}
               </div>
-            </ScrollArea>
+            </div>
 
             {user && (
               <div className="p-4 border-t">
