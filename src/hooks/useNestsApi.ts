@@ -166,6 +166,63 @@ export function useUpdateNestPermissions() {
 }
 
 /**
+ * Hook for restarting a nest (host only)
+ */
+export function useRestartNest() {
+  const { user } = useCurrentUser();
+
+  return useMutation({
+    mutationFn: async (roomId: string): Promise<CreateNestResponse> => {
+      if (!user) throw new Error('User must be logged in');
+
+      const url = `${NESTS_API_BASE}/${roomId}/restart`;
+      console.log('Restarting nest:', { roomId, url });
+      
+      const authHeader = await createNip98AuthHeader(user, 'POST', url);
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+        },
+      });
+
+      console.log('Restart nest response:', { 
+        status: response.status, 
+        statusText: response.statusText,
+        url 
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => response.statusText);
+        console.error('Restart nest failed:', { status: response.status, errorText });
+        
+        if (response.status === 403) {
+          throw new Error('Only the host can restart the nest');
+        } else if (response.status === 404) {
+          throw new Error('Nest not found');
+        } else {
+          throw new Error(`Failed to restart nest: ${response.statusText}`);
+        }
+      }
+
+      const jsonResponse = await response.json();
+      console.log('Restart nest JSON response:', jsonResponse);
+      console.log('Restart nest token analysis:', {
+        hasToken: 'token' in jsonResponse,
+        tokenType: typeof jsonResponse.token,
+        tokenValue: jsonResponse.token,
+        tokenIsString: typeof jsonResponse.token === 'string',
+        tokenLength: jsonResponse.token?.length,
+        tokenPreview: typeof jsonResponse.token === 'string' ? jsonResponse.token.substring(0, 50) + '...' : 'Not a string'
+      });
+
+      return jsonResponse;
+    },
+  });
+}
+
+/**
  * Hook for getting nest info
  */
 export function useGetNestInfo() {

@@ -64,6 +64,29 @@ describe('Nests API', () => {
     });
   });
 
+  describe('POST /api/v1/nests/:roomId/restart', () => {
+    it('should require authentication', async () => {
+      const fakeRoomId = '00000000-0000-4000-8000-000000000000';
+      
+      const res = await request(app)
+        .post(`/api/v1/nests/${fakeRoomId}/restart`)
+        .expect(401);
+      
+      expect(res.body).toHaveProperty('error');
+    });
+
+    it('should handle non-existent room', async () => {
+      const fakeRoomId = '00000000-0000-4000-8000-000000000000';
+      
+      const res = await request(app)
+        .post(`/api/v1/nests/${fakeRoomId}/restart`)
+        .set('Authorization', 'Nostr invalid-token')
+        .expect(401); // Will fail auth before checking room existence
+      
+      expect(res.body).toHaveProperty('error');
+    });
+  });
+
   describe('Error handling', () => {
     it('should handle 404 for unknown endpoints', async () => {
       const res = await request(app)

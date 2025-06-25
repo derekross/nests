@@ -110,6 +110,29 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Debug endpoint to list all routes
+app.get('/debug/routes', (req, res) => {
+  const routes = [];
+  app._router.stack.forEach((middleware) => {
+    if (middleware.route) {
+      routes.push({
+        path: middleware.route.path,
+        methods: Object.keys(middleware.route.methods)
+      });
+    } else if (middleware.name === 'router') {
+      middleware.handle.stack.forEach((handler) => {
+        if (handler.route) {
+          routes.push({
+            path: handler.route.path,
+            methods: Object.keys(handler.route.methods)
+          });
+        }
+      });
+    }
+  });
+  res.json({ routes });
+});
+
 // Middleware for NIP-98 authentication
 const requireAuth = async (req, res, next) => {
   try {
@@ -149,7 +172,8 @@ app.put('/api/v1/nests', requireAuth, async (req, res) => {
     const room = await roomService.createRoom({
       name: roomId,
       maxParticipants: 500,
-      emptyTimeout: 300, // 5 minutes
+      emptyTimeout: 1800, // 30 minutes
+      departureTimeout: 60, // 1 minute
       metadata: JSON.stringify({
         nestId: roomId,
         host: hostPubkey,
@@ -380,6 +404,173 @@ app.post('/api/v1/nests/:roomId/permissions', requireAuth, async (req, res) => {
   } catch (error) {
     logger.error('Update permissions error:', error);
     res.status(500).json({ error: 'Failed to update permissions' });
+  }
+});
+
+// Debug: Log all incoming requests
+app.use('/api/v1/nests/:roomId/restart', (req, res, next) => {
+  logger.info(`Restart endpoint hit: ${req.method} ${req.originalUrl}`, {
+    params: req.params,
+    headers: req.headers,
+    body: req.body
+  });
+  next();
+});
+
+// Restart nest (host only)
+app.post('/api/v1/nests/:roomId/restart', requireAuth, async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const requesterPubkey = req.pubkey;
+
+    logger.info(`Restart request for nest ${roomId} from ${requesterPubkey}`);
+
+    // Get room info from Redis
+    const roomData = await redis.get(`nest:${roomId}`);
+    if (!roomData) {
+      logger.warn(`Restart failed: Nest ${roomId} not found in Redis`);
+      return res.status(404).json({ error: 'Nest not found' });
+    }
+
+    const roomInfo = JSON.parse(roomData);
+
+    // Only host can restart the nest
+    if (roomInfo.host !== requesterPubkey) {
+      logger.warn(`Restart failed: ${requesterPubkey} is not the host of nest ${roomId}`);
+      return res.status(403).json({ error: 'Only the host can restart the nest' });
+    }
+
+    // Check if room already exists and is active
+    let roomExists = false;
+    try {
+      const existingRoom = await roomService.getRoom(roomId);
+      roomExists = true;
+      logger.info(`Found existing LiveKit room ${roomId}, will delete and recreate`);
+    } catch (error) {
+      logger.info(`No existing LiveKit room ${roomId} found, will create new one`);
+    }
+
+    // If room exists, delete it first and wait for cleanup
+    if (roomExists) {
+      try {
+        await roomService.deleteRoom(roomId);
+        logger.info(`Deleted existing room ${roomId} for restart`);
+        // Wait longer for proper cleanup
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } catch (error) {
+        logger.warn(`Failed to delete existing room ${roomId}:`, error);
+        // Continue anyway, might be already deleted
+      }
+    }
+
+    // Create new LiveKit room with same ID and longer timeout
+    const room = await roomService.createRoom({
+      name: roomId,
+      maxParticipants: 500,
+      emptyTimeout: 1800, // 30 minutes
+      departureTimeout: 60, // 1 minute
+      metadata: JSON.stringify({
+        nestId: roomId,
+        host: requesterPubkey,
+        relays: roomInfo.relays,
+        createdAt: roomInfo.createdAt,
+        restartedAt: Date.now(),
+      }),
+    });
+
+    logger.info(`Created new LiveKit room ${roomId} with 30-minute timeout`);
+
+    // Generate new host token
+    logger.info(`Creating AccessToken with:`, {
+      apiKey: config.livekit.apiKey,
+      apiSecretLength: config.livekit.apiSecret?.length,
+      identity: requesterPubkey,
+      roomId: roomId
+    });
+
+    const token = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
+      identity: requesterPubkey,
+      name: 'Host',
+      metadata: JSON.stringify({ role: 'host', pubkey: requesterPubkey }),
+    });
+
+    token.addGrant({
+      room: roomId,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+      roomAdmin: true,
+      roomRecord: true,
+    });
+
+    logger.info(`Token before toJwt():`, {
+      tokenType: typeof token,
+      hasToJwt: typeof token.toJwt === 'function',
+      tokenProps: Object.getOwnPropertyNames(token),
+      grants: token.grants
+    });
+
+    let jwt;
+    try {
+      // Try sync first, then async
+      jwt = token.toJwt();
+      if (jwt instanceof Promise) {
+        logger.info('toJwt() returned a Promise, awaiting...');
+        jwt = await jwt;
+      }
+      
+      logger.info(`JWT after toJwt():`, {
+        jwtType: typeof jwt,
+        jwtLength: jwt?.length,
+        jwtPreview: typeof jwt === 'string' ? jwt.substring(0, 50) + '...' : jwt
+      });
+      
+      // Validate the JWT is a non-empty string
+      if (typeof jwt !== 'string' || jwt.length === 0) {
+        throw new Error(`Invalid JWT generated: ${typeof jwt}, value: ${jwt}`);
+      }
+    } catch (error) {
+      logger.error(`toJwt() failed:`, error);
+      throw new Error(`Failed to generate JWT: ${error.message}`);
+    }
+
+    logger.info(`JWT generation result:`, {
+      jwtType: typeof jwt,
+      jwtValue: jwt,
+      jwtLength: jwt?.length,
+      jwtPreview: typeof jwt === 'string' ? jwt.substring(0, 50) + '...' : 'Not a string',
+      tokenObject: token,
+      tokenMethods: Object.getOwnPropertyNames(token)
+    });
+
+    // Update room info in Redis with restart timestamp
+    const updatedRoomInfo = {
+      ...roomInfo,
+      status: 'active',
+      restartedAt: Date.now(),
+    };
+
+    await redis.setEx(`nest:${roomId}`, 3600 * 24, JSON.stringify(updatedRoomInfo));
+
+    // Build endpoints
+    const endpoints = [`wss+livekit://${config.livekit.url.replace('ws://', '').replace('wss://', '')}`];
+    if (roomInfo.hls_stream) {
+      endpoints.push(`https://nostrnests.com/api/v1/live/${roomId}/live.m3u8`);
+    }
+
+    logger.info(`Successfully restarted nest ${roomId} for host ${requesterPubkey}`);
+
+    logger.info(`Sending restart response with token type: ${typeof jwt}`);
+    
+    res.json({
+      roomId,
+      endpoints,
+      token: jwt, // This should be a string
+      message: 'Nest restarted successfully',
+    });
+  } catch (error) {
+    logger.error('Restart nest error:', error);
+    res.status(500).json({ error: 'Failed to restart nest' });
   }
 });
 

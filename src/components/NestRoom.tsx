@@ -8,10 +8,11 @@ import { Input } from '@/components/ui/input';
 import { useAuthor } from '@/hooks/useAuthor';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
+import { useToast } from '@/hooks/useToast';
 import { useNest, useNestChat } from '@/hooks/useNests';
 import { useLiveKit } from '@/hooks/useLiveKit';
 import { useNestPresence } from '@/hooks/useNestPresence';
-import { useJoinNest, useJoinNestAsGuest } from '@/hooks/useNestsApi';
+import { useJoinNest, useJoinNestAsGuest, useRestartNest } from '@/hooks/useNestsApi';
 import { genUserName } from '@/lib/genUserName';
 import { 
   Mic, 
@@ -38,6 +39,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   
   const { user } = useCurrentUser();
   const { mutate: createEvent } = useNostrPublish();
+  const { toast } = useToast();
   const { data: nest } = useNest(nestNaddr);
   const { data: chatMessages = [] } = useNestChat(nestNaddr);
   
@@ -56,6 +58,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
 
   const { mutateAsync: joinNest } = useJoinNest();
   const { mutateAsync: joinNestAsGuest } = useJoinNestAsGuest();
+  const { mutateAsync: restartNest, isPending: isRestarting } = useRestartNest();
 
   // Manage presence
   useNestPresence({
@@ -69,15 +72,42 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   const summary = nest?.tags.find(([name]) => name === 'summary')?.[1];
   const streamingUrls = nest?.tags.filter(([name]) => name === 'streaming').map(([, url]) => url) || [];
   const roomId = nest?.tags.find(([name]) => name === 'd')?.[1];
+  
+  // Check if current user is the host
+  const isHost = user && nest && nest.pubkey === user.pubkey;
 
-  // Find LiveKit URL
-  const liveKitUrl = streamingUrls.find(url => url.startsWith('wss+livekit://'))?.replace('wss+livekit://', 'wss://');
+  // Find LiveKit URL and convert for local development
+  const rawLiveKitUrl = streamingUrls.find(url => url.startsWith('wss+livekit://'));
+  const liveKitUrl = rawLiveKitUrl 
+    ? rawLiveKitUrl
+        .replace('wss+livekit://', 'ws://') // Use ws:// for local dev
+        .replace('livekit:7880', 'localhost:7880') // Use localhost instead of container name
+    : undefined;
+  
+  console.log('LiveKit URL conversion:', {
+    raw: rawLiveKitUrl,
+    converted: liveKitUrl,
+    isDev: process.env.NODE_ENV !== 'production'
+  });
 
   const handleJoinNest = async () => {
     if (!roomId || !liveKitUrl) return;
     
     setIsConnecting(true);
     setJoinError(null);
+    
+    // Check microphone permissions before connecting
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('Microphone permission granted');
+      stream.getTracks().forEach(track => track.stop()); // Clean up test stream
+    } catch (permError) {
+      console.warn('Microphone permission denied or not available:', permError);
+      setJoinError('Microphone access is required for audio. Please allow microphone permissions and try again.');
+      setIsConnecting(false);
+      return;
+    }
+    
     try {
       let token: string;
       
@@ -91,10 +121,18 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
       if (user) {
         const response = await joinNest(roomId);
         token = response.token;
+        console.log('Join nest response:', { tokenType: typeof token, token });
       } else {
         const response = await joinNestAsGuest(roomId);
         token = response.token;
+        console.log('Join nest as guest response:', { tokenType: typeof token, token });
       }
+
+      console.log('Connecting with join token:', {
+        serverUrl: liveKitUrl,
+        tokenType: typeof token,
+        hasToken: !!token
+      });
 
       await connect({
         serverUrl: liveKitUrl,
@@ -111,12 +149,14 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
       
       // Set user-friendly error message
       if (err instanceof Error) {
-        if (err.message.includes('Not Found') || err.message.includes('404')) {
-          setJoinError('This nest is no longer available. It may have been closed or deleted.');
+        if (err.message.includes('Not Found') || err.message.includes('404') || err.message.includes('no longer active')) {
+          setJoinError('This nest is no longer available. The audio session may have timed out or been closed.');
         } else if (err.message.includes('Unauthorized') || err.message.includes('401')) {
           setJoinError('You are not authorized to join this nest.');
         } else if (err.message.includes('Forbidden') || err.message.includes('403')) {
           setJoinError('This nest is private or you do not have permission to join.');
+        } else if (err.message.includes('timeout') || err.message.includes('network')) {
+          setJoinError('Connection timeout. Please check your internet connection and try again.');
         } else {
           setJoinError(`Failed to join nest: ${err.message}`);
         }
@@ -131,6 +171,100 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   const handleLeaveNest = () => {
     disconnect();
     onLeave();
+  };
+
+  const handleRestartNest = async () => {
+    if (!roomId || !isHost) return;
+    
+    setIsConnecting(true);
+    setJoinError(null);
+    
+    // Disconnect from current session first
+    if (isConnected) {
+      disconnect();
+      // Wait a moment for cleanup
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    // Check microphone permissions before restarting
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('Microphone permission granted for restart');
+      stream.getTracks().forEach(track => track.stop()); // Clean up test stream
+    } catch (permError) {
+      console.warn('Microphone permission denied during restart:', permError);
+      setJoinError('Microphone access is required for audio. Please allow microphone permissions and try again.');
+      setIsConnecting(false);
+      return;
+    }
+    
+    try {
+      console.log('Restarting nest:', { roomId, isHost });
+      
+      const response = await restartNest(roomId);
+      
+      console.log('Nest restart response:', response);
+      
+      // Wait a moment for the new room to be fully ready
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // After successful restart, automatically connect
+      // Debug the token issue
+      console.log('Raw restart response:', response);
+      console.log('Token analysis:', {
+        tokenExists: 'token' in response,
+        tokenType: typeof response.token,
+        tokenValue: response.token,
+        tokenStringified: JSON.stringify(response.token),
+        tokenKeys: response.token ? Object.keys(response.token) : 'N/A'
+      });
+      
+      // Ensure token is a string (safeguard against API returning object)
+      let token;
+      if (typeof response.token === 'string' && response.token.length > 0) {
+        token = response.token;
+      } else if (response.token && typeof response.token === 'object') {
+        // If it's an object, try to extract the JWT string
+        token = response.token.jwt || response.token.token || JSON.stringify(response.token);
+      } else {
+        throw new Error('Invalid token received from restart API');
+      }
+      
+      console.log('Final token for connection:', {
+        tokenType: typeof token,
+        tokenLength: token.length,
+        tokenPreview: token.substring(0, 50) + '...'
+      });
+      
+      await connect({
+        serverUrl: liveKitUrl!,
+        token: token,
+      });
+      
+      console.log('Nest restarted and connected successfully');
+      
+      toast({
+        title: "Nest Restarted",
+        description: "Your nest has been successfully restarted and you're now connected.",
+        duration: 5000,
+      });
+    } catch (err) {
+      console.error('Failed to restart nest:', err);
+      
+      if (err instanceof Error) {
+        if (err.message.includes('Only the host')) {
+          setJoinError('Only the nest host can restart the session.');
+        } else if (err.message.includes('404') || err.message.includes('Not Found')) {
+          setJoinError('Nest data not found. The nest may have been deleted.');
+        } else {
+          setJoinError(`Failed to restart nest: ${err.message}`);
+        }
+      } else {
+        setJoinError('An unexpected error occurred while restarting the nest.');
+      }
+    } finally {
+      setIsConnecting(false);
+    }
   };
 
   const handleSendMessage = () => {
@@ -181,6 +315,17 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
             >
               {isConnected ? 'Connected' : 'Disconnected'}
             </Badge>
+            {isHost && (
+              <Button 
+                variant="outline" 
+                onClick={handleRestartNest}
+                disabled={isRestarting || isConnecting}
+                size="sm"
+                className="text-green-600 border-green-600 hover:bg-green-50 dark:hover:bg-green-950"
+              >
+                {isRestarting ? 'Restarting...' : 'Restart'}
+              </Button>
+            )}
             <Button variant="outline" onClick={handleLeaveNest}>
               Leave Nest
             </Button>
@@ -230,13 +375,37 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
                   </Button>
                   
                   {joinError && (
-                    <Button 
-                      onClick={handleLeaveNest}
-                      variant="outline"
-                      size="sm"
-                    >
-                      Back to Nests
-                    </Button>
+                    <div className="flex gap-2">
+                      {isHost && (joinError.includes('no longer available') || joinError.includes('no longer active') || joinError.includes('timed out')) && (
+                        <Button 
+                          onClick={handleRestartNest}
+                          disabled={isRestarting || isConnecting}
+                          variant="default"
+                          size="sm"
+                          className="bg-green-600 hover:bg-green-700 text-white"
+                        >
+                          {isRestarting ? 'Restarting...' : 'Restart Nest'}
+                        </Button>
+                      )}
+                      {!isHost && (joinError.includes('no longer available') || joinError.includes('timeout')) && (
+                        <Button 
+                          onClick={handleJoinNest}
+                          disabled={isConnecting}
+                          variant="default"
+                          size="sm"
+                          className="bg-blue-600 hover:bg-blue-700 text-white"
+                        >
+                          {isConnecting ? 'Retrying...' : 'Retry Connection'}
+                        </Button>
+                      )}
+                      <Button 
+                        onClick={handleLeaveNest}
+                        variant="outline"
+                        size="sm"
+                      >
+                        Back to Nests
+                      </Button>
+                    </div>
                   )}
                 </div>
                 {!liveKitUrl && (

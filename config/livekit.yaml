@@ -22,8 +22,8 @@ keys:
 room:
   auto_create: true
   max_participants: 500
-  empty_timeout: 300
-  departure_timeout: 20
+  empty_timeout: 1800  # 30 minutes instead of 5 minutes
+  departure_timeout: 60  # 1 minute instead of 20 seconds
 
 # Logging
 log_level: info
