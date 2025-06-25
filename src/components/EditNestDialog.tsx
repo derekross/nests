@@ -149,7 +149,7 @@ export function EditNestDialog({ isOpen, onClose, nest, onNestUpdated }: EditNes
         tags.push(...existingStreamingTags);
       }
 
-      // Preserve other important tags like starts, status (live/ended), etc.
+      // Preserve other important tags like starts, ends, etc.
       const preserveTags = nest.tags.filter(([name]) => 
         ['starts', 'ends'].includes(name)
       );

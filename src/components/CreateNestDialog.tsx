@@ -50,7 +50,7 @@ export function CreateNestDialog({ children, onNestCreated }: CreateNestDialogPr
   const [isCreating, setIsCreating] = useState(false);
   
   const { user } = useCurrentUser();
-  const { mutate: createEvent } = useNostrPublish();
+  const { mutateAsync: createEvent } = useNostrPublish();
   const { mutateAsync: createNest } = useCreateNest();
   const { config } = useAppContext();
 
@@ -111,9 +111,9 @@ export function CreateNestDialog({ children, onNestCreated }: CreateNestDialogPr
 
       // Add current timestamp as start time
       tags.push(['starts', Math.floor(Date.now() / 1000).toString()]);
-      tags.push(['status', 'live']);
 
-      createEvent({
+      // Wait for the Nostr event to be published
+      await createEvent({
         kind: 30312,
         content: '',
         tags,

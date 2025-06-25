@@ -40,7 +40,7 @@ import {
 export function Nests() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedNest, setSelectedNest] = useState<string | null>(null);
-  const [filterStatus, setFilterStatus] = useState<'live' | 'open'>('live');
+  const [filterStatus, setFilterStatus] = useState<'active' | 'open'>('active');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const { data: nests, isLoading } = useNests();
@@ -61,9 +61,16 @@ export function Nests() {
       summary.toLowerCase().includes(searchText) ||
       hashtags.some(tag => tag.toLowerCase().includes(searchText));
     
-    // Status filter
-    const matchesStatus = (filterStatus === 'live' && status === 'live') ||
-      (filterStatus === 'open' && (status === 'open' || status === 'live'));
+    // Status filter based on NIP-53
+    // "active" shows open nests that have recent activity (starts tag within last 24 hours)
+    // "open" shows all open nests regardless of activity
+    const startsTag = nest.tags.find(([name]) => name === 'starts')?.[1];
+    const startTime = startsTag ? parseInt(startsTag) : 0;
+    const twentyFourHoursAgo = Math.floor(Date.now() / 1000) - (24 * 60 * 60);
+    const isRecentlyActive = startTime > twentyFourHoursAgo;
+    
+    const matchesStatus = (filterStatus === 'active' && status === 'open' && isRecentlyActive) ||
+      (filterStatus === 'open' && status === 'open');
     
     return matchesSearch && matchesStatus;
   }) || [];
@@ -79,7 +86,7 @@ export function Nests() {
   };
 
   const handleExploreLiveNests = () => {
-    setFilterStatus('live');
+    setFilterStatus('active');
     // Scroll to nests section
     const nestsSection = document.getElementById('nests-section');
     if (nestsSection) {
@@ -452,12 +459,12 @@ export function Nests() {
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
             <div className="flex gap-2 flex-1">
               <Button
-                variant={filterStatus === 'live' ? 'default' : 'outline'}
-                onClick={() => setFilterStatus('live')}
+                variant={filterStatus === 'active' ? 'default' : 'outline'}
+                onClick={() => setFilterStatus('active')}
                 size="sm"
-                className={`flex-1 sm:flex-none touch-target ${filterStatus === 'live' ? 'bg-gradient-purple glow-purple' : ''}`}
+                className={`flex-1 sm:flex-none touch-target ${filterStatus === 'active' ? 'bg-gradient-purple glow-purple' : ''}`}
               >
-                Live
+                Active
               </Button>
               <Button
                 variant={filterStatus === 'open' ? 'default' : 'outline'}
@@ -504,10 +511,10 @@ export function Nests() {
                   <div className="text-center">
                     <div className="font-semibold text-gradient-purple text-lg sm:text-xl">
                       {filteredNests.filter(nest => 
-                        nest.tags.find(([name]) => name === 'status')?.[1] === 'live'
+                        nest.tags.find(([name]) => name === 'status')?.[1] === 'open'
                       ).length}
                     </div>
-                    <div className="text-muted-foreground text-xs sm:text-sm">Live Now</div>
+                    <div className="text-muted-foreground text-xs sm:text-sm">Open Now</div>
                   </div>
                 </div>
               </div>

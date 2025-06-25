@@ -11,7 +11,7 @@ Nests uses the Interactive Room event kind from NIP-53 to represent audio spaces
 **Required tags:**
 - `d`: Unique identifier for the nest (room ID from LiveKit API)
 - `room`: Display name of the nest
-- `status`: Room accessibility (`open`, `private`, `closed`)
+- `status`: Room accessibility (`open`, `private`, `closed`) - Note: `live` status is only for meetings (kind 30313), not rooms
 - `service`: API endpoint for nest management (`https://nostrnests.com/api/v1/nests`)
 - `p`: At least one provider with role (e.g., `Host`, `Moderator`, `Speaker`)
 
@@ -35,7 +35,7 @@ Nests uses the Interactive Room event kind from NIP-53 to represent audio spaces
     ["room", "Bitcoin Discussion"],
     ["summary", "Weekly discussion about Bitcoin development"],
     ["image", "https://example.com/bitcoin.jpg"],
-    ["status", "live"],
+    ["status", "open"],
     ["service", "https://nostrnests.com/api/v1/nests"],
     ["streaming", "wss://nostrnests.com"],
     ["streaming", "https://nostrnests.com/api/v1/live/abc123-def456/live.m3u8"],

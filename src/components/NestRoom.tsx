@@ -41,6 +41,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [showEditDialog, setShowEditDialog] = useState(false);
+  const [isDeletingEvent, setIsDeletingEvent] = useState(false);
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   
@@ -375,8 +376,9 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
       // Delete from API first
       await deleteNest(roomId);
 
-      // Then delete the Nostr event by publishing a deletion event
-      createEvent({
+      // Then delete the Nostr event by publishing a deletion event (kind 5)
+      setIsDeletingEvent(true);
+      await createEvent({
         kind: 5,
         content: 'Nest deleted',
         tags: [
@@ -384,6 +386,10 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
           ['a', `30312:${nest.pubkey}:${nest.tags.find(([name]) => name === 'd')?.[1]}`]
         ],
       });
+
+      // Invalidate queries to remove the nest from the UI
+      queryClient.invalidateQueries({ queryKey: ['nest', nestNaddr] });
+      queryClient.invalidateQueries({ queryKey: ['nests'] });
 
       toast({
         title: "Nest Deleted",
@@ -399,6 +405,8 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
         description: error instanceof Error ? error.message : "Failed to delete nest. Please try again.",
         variant: "destructive",
       });
+    } finally {
+      setIsDeletingEvent(false);
     }
   };
 
@@ -447,7 +455,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
                 isUpdatingStatus={false}
                 isRestarting={isRestarting}
                 isDeleting={isDeleting}
-                isDeletingEvent={false}
+                isDeletingEvent={isDeletingEvent}
                 isConnecting={isConnecting}
                 onUpdateStatus={handleUpdateStatus}
                 onRestart={handleRestartNest}

@@ -43,8 +43,7 @@ export function NestCard({ nest }: NestCardProps) {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'live': return 'bg-green-500';
-      case 'open': return 'bg-primary';
+      case 'open': return 'bg-green-500';
       case 'private': return 'bg-yellow-500';
       case 'closed': return 'bg-gray-500';
       default: return 'bg-gray-500';
@@ -53,7 +52,6 @@ export function NestCard({ nest }: NestCardProps) {
 
   const getStatusText = (status: string) => {
     switch (status) {
-      case 'live': return 'Live';
       case 'open': return 'Open';
       case 'private': return 'Private';
       case 'closed': return 'Closed';
@@ -61,7 +59,7 @@ export function NestCard({ nest }: NestCardProps) {
     }
   };
 
-  const isJoinable = status === 'live' || status === 'open';
+  const isJoinable = status === 'open';
 
   const handleJoinNest = () => {
     if (isJoinable) {
@@ -78,10 +76,10 @@ export function NestCard({ nest }: NestCardProps) {
               <Badge variant="secondary" className={`${getStatusColor(status)} text-white text-xs`}>
                 {getStatusText(status)}
               </Badge>
-              {status === 'live' && (
+              {status === 'open' && (
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Mic className="h-3 w-3" />
-                  <span>Live</span>
+                  <span>Available</span>
                 </div>
               )}
             </div>

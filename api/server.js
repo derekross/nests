@@ -574,6 +574,51 @@ app.post('/api/v1/nests/:roomId/restart', requireAuth, async (req, res) => {
   }
 });
 
+// Delete nest (host only)
+app.delete('/api/v1/nests/:roomId', requireAuth, async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const requesterPubkey = req.pubkey;
+
+    logger.info(`Delete request for nest ${roomId} from ${requesterPubkey}`);
+
+    // Get room info from Redis
+    const roomData = await redis.get(`nest:${roomId}`);
+    if (!roomData) {
+      logger.warn(`Delete failed: Nest ${roomId} not found in Redis`);
+      return res.status(404).json({ error: 'Nest not found' });
+    }
+
+    const roomInfo = JSON.parse(roomData);
+
+    // Only host can delete the nest
+    if (roomInfo.host !== requesterPubkey) {
+      logger.warn(`Delete failed: ${requesterPubkey} is not the host of nest ${roomId}`);
+      return res.status(403).json({ error: 'Only the host can delete the nest' });
+    }
+
+    // Delete the LiveKit room
+    try {
+      await roomService.deleteRoom(roomId);
+      logger.info(`Deleted LiveKit room ${roomId}`);
+    } catch (error) {
+      logger.warn(`Failed to delete LiveKit room ${roomId}:`, error);
+      // Continue anyway, room might already be deleted
+    }
+
+    // Remove room data from Redis
+    await redis.del(`nest:${roomId}`);
+    logger.info(`Removed nest ${roomId} data from Redis`);
+
+    logger.info(`Successfully deleted nest ${roomId} by host ${requesterPubkey}`);
+
+    res.status(204).send(); // No content response for successful deletion
+  } catch (error) {
+    logger.error('Delete nest error:', error);
+    res.status(500).json({ error: 'Failed to delete nest' });
+  }
+});
+
 // Get nest info
 app.get('/api/v1/nests/:roomId/info', async (req, res) => {
   try {
