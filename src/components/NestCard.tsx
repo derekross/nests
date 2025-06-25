@@ -5,15 +5,16 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuthor } from '@/hooks/useAuthor';
 import { genUserName } from '@/lib/genUserName';
 import { Users, Mic } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import type { NostrEvent } from '@nostrify/nostrify';
 import { nip19 } from 'nostr-tools';
 
 interface NestCardProps {
   nest: NostrEvent;
-  onJoin: (nestNaddr: string) => void;
 }
 
-export function NestCard({ nest, onJoin }: NestCardProps) {
+export function NestCard({ nest }: NestCardProps) {
+  const navigate = useNavigate();
   // Extract nest data from tags
   const d = nest.tags.find(([name]) => name === 'd')?.[1] || '';
   const room = nest.tags.find(([name]) => name === 'room')?.[1] || 'Untitled Nest';
@@ -61,6 +62,12 @@ export function NestCard({ nest, onJoin }: NestCardProps) {
   };
 
   const isJoinable = status === 'live' || status === 'open';
+
+  const handleJoinNest = () => {
+    if (isJoinable) {
+      navigate(`/${nestNaddr}`);
+    }
+  };
 
   return (
     <Card className="hover:shadow-lg hover:shadow-primary/10 transition-all duration-200 border-primary/10 hover:border-primary/20 h-full flex flex-col">
@@ -146,7 +153,7 @@ export function NestCard({ nest, onJoin }: NestCardProps) {
 
         {/* Join button */}
         <Button 
-          onClick={() => onJoin(nestNaddr)}
+          onClick={handleJoinNest}
           disabled={!isJoinable}
           className={`w-full mt-4 touch-target ${isJoinable ? 'bg-gradient-purple hover:opacity-90 glow-purple' : ''}`}
           variant={isJoinable ? "default" : "secondary"}

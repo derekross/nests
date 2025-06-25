@@ -68,9 +68,7 @@ export function Nests() {
     return matchesSearch && matchesStatus;
   }) || [];
 
-  const handleJoinNest = (nestNaddr: string) => {
-    setSelectedNest(nestNaddr);
-  };
+
 
   const handleLeaveNest = () => {
     setSelectedNest(null);
@@ -547,7 +545,6 @@ export function Nests() {
               <NestCard
                 key={nest.id}
                 nest={nest}
-                onJoin={handleJoinNest}
               />
             ))}
           </div>
