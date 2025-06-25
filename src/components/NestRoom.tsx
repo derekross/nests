@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { ScrollArea } from '@/components/ui/scroll-area';
+
 import { Input } from '@/components/ui/input';
 import { useAuthor } from '@/hooks/useAuthor';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
@@ -12,7 +13,7 @@ import { useToast } from '@/hooks/useToast';
 import { useNest, useNestChat } from '@/hooks/useNests';
 import { useLiveKit } from '@/hooks/useLiveKit';
 import { useNestPresence } from '@/hooks/useNestPresence';
-import { useJoinNest, useJoinNestAsGuest, useRestartNest } from '@/hooks/useNestsApi';
+import { useJoinNest, useJoinNestAsGuest, useRestartNest, useDeleteNest } from '@/hooks/useNestsApi';
 import { genUserName } from '@/lib/genUserName';
 import { 
   Mic, 
@@ -24,6 +25,9 @@ import {
 } from 'lucide-react';
 import { NoteContent } from '@/components/NoteContent';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { NestHostSettings } from '@/components/NestHostSettings';
+import { EditNestDialog } from '@/components/EditNestDialog';
+
 import type { NostrEvent } from '@nostrify/nostrify';
 
 interface NestRoomProps {
@@ -36,11 +40,14 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   const [showChat, setShowChat] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+
   const chatScrollRef = useRef<HTMLDivElement>(null);
   
   const { user } = useCurrentUser();
-  const { mutate: createEvent } = useNostrPublish();
+  const { mutateAsync: createEvent } = useNostrPublish();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { data: nest } = useNest(nestNaddr);
   const { data: chatMessages = [] } = useNestChat(nestNaddr);
 
@@ -78,6 +85,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   const { mutateAsync: joinNest } = useJoinNest();
   const { mutateAsync: joinNestAsGuest } = useJoinNestAsGuest();
   const { mutateAsync: restartNest, isPending: isRestarting } = useRestartNest();
+  const { mutateAsync: deleteNest, isPending: isDeleting } = useDeleteNest();
 
   // Manage presence
   useNestPresence({
@@ -91,6 +99,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   const summary = nest?.tags.find(([name]) => name === 'summary')?.[1];
   const streamingUrls = nest?.tags.filter(([name]) => name === 'streaming').map(([, url]) => url) || [];
   const roomId = nest?.tags.find(([name]) => name === 'd')?.[1];
+  const currentStatus = nest?.tags.find(([name]) => name === 'status')?.[1] || 'closed';
   
   // Check if current user is the host
   const isHost = user && nest && nest.pubkey === user.pubkey;
@@ -287,18 +296,30 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
     }
   };
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!chatMessage.trim() || !user) return;
 
-    createEvent({
-      kind: 1311,
-      content: chatMessage,
-      tags: [
-        ['a', nestNaddr, '', 'root']
-      ],
-    });
+    try {
+      await createEvent({
+        kind: 1311,
+        content: chatMessage,
+        tags: [
+          ['a', nestNaddr, '', 'root']
+        ],
+      });
 
-    setChatMessage('');
+      setChatMessage('');
+      
+      // Invalidate chat query to show new message immediately
+      queryClient.invalidateQueries({ queryKey: ['nest-chat', nestNaddr] });
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      toast({
+        title: "Message Failed",
+        description: "Failed to send message. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -307,6 +328,91 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
       handleSendMessage();
     }
   };
+
+  const handleUpdateStatus = async (status: 'open' | 'private' | 'closed') => {
+    if (!nest || !user) return;
+
+    try {
+      // Update the nest event with new status
+      const d = nest.tags.find(([name]) => name === 'd')?.[1];
+      if (!d) throw new Error('Nest identifier not found');
+
+      // Preserve all existing tags except status
+      const existingTags = nest.tags.filter(([name]) => name !== 'status');
+      const newTags = [...existingTags, ['status', status]];
+
+      const updatedEvent = await createEvent({
+        kind: 30312,
+        content: nest.content,
+        tags: newTags,
+      });
+
+      // Invalidate and refetch the nest query to show updated status
+      queryClient.invalidateQueries({ queryKey: ['nest', nestNaddr] });
+      queryClient.invalidateQueries({ queryKey: ['nests'] });
+
+      // Update the cache directly with the new event
+      queryClient.setQueryData(['nest', nestNaddr], updatedEvent);
+
+      toast({
+        title: "Status Updated",
+        description: `Nest status changed to ${status}.`,
+      });
+    } catch (error) {
+      console.error('Failed to update status:', error);
+      toast({
+        title: "Update Failed",
+        description: "Failed to update nest status. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDeleteNest = async () => {
+    if (!roomId || !nest) return;
+
+    try {
+      // Delete from API first
+      await deleteNest(roomId);
+
+      // Then delete the Nostr event by publishing a deletion event
+      createEvent({
+        kind: 5,
+        content: 'Nest deleted',
+        tags: [
+          ['e', nest.id],
+          ['a', `30312:${nest.pubkey}:${nest.tags.find(([name]) => name === 'd')?.[1]}`]
+        ],
+      });
+
+      toast({
+        title: "Nest Deleted",
+        description: "Your nest has been successfully deleted.",
+      });
+
+      // Leave the nest
+      onLeave();
+    } catch (error) {
+      console.error('Failed to delete nest:', error);
+      toast({
+        title: "Delete Failed",
+        description: error instanceof Error ? error.message : "Failed to delete nest. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleEditNest = () => {
+    setShowEditDialog(true);
+  };
+
+  const handleNestUpdated = () => {
+    // Additional invalidation to ensure the room reflects changes immediately
+    queryClient.invalidateQueries({ queryKey: ['nest', nestNaddr] });
+    queryClient.invalidateQueries({ queryKey: ['nests'] });
+  };
+
+
 
   if (!nest) {
     return (
@@ -336,15 +442,19 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
               {isConnected ? 'Connected' : 'Disconnected'}
             </Badge>
             {isHost && (
-              <Button 
-                variant="outline" 
-                onClick={handleRestartNest}
-                disabled={isRestarting || isConnecting}
-                size="sm"
-                className="text-green-600 border-green-600 hover:bg-green-50 dark:hover:bg-green-950"
-              >
-                {isRestarting ? 'Restarting...' : 'Restart'}
-              </Button>
+              <NestHostSettings
+                currentStatus={currentStatus}
+                isUpdatingStatus={false}
+                isRestarting={isRestarting}
+                isDeleting={isDeleting}
+                isDeletingEvent={false}
+                isConnecting={isConnecting}
+                onUpdateStatus={handleUpdateStatus}
+                onRestart={handleRestartNest}
+                onDelete={handleDeleteNest}
+                onEdit={handleEditNest}
+                roomName={roomName}
+              />
             )}
             <Button variant="outline" onClick={handleLeaveNest}>
               Leave Nest
@@ -551,6 +661,16 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
           </div>
         )}
       </div>
+
+      {/* Edit Nest Dialog */}
+      {nest && (
+        <EditNestDialog
+          isOpen={showEditDialog}
+          onClose={() => setShowEditDialog(false)}
+          nest={nest}
+          onNestUpdated={handleNestUpdated}
+        />
+      )}
     </div>
   );
 }

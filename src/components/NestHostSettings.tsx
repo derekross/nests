@@ -17,7 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings, Trash2, RotateCcw } from 'lucide-react';
+import { Settings, Trash2, RotateCcw, Edit } from 'lucide-react';
 
 interface NestHostSettingsProps {
   currentStatus: string;
@@ -29,6 +29,7 @@ interface NestHostSettingsProps {
   onUpdateStatus: (status: 'open' | 'private' | 'closed') => Promise<void>;
   onRestart: () => Promise<void>;
   onDelete: () => Promise<void>;
+  onEdit: () => void;
   roomName: string;
 }
 
@@ -42,6 +43,7 @@ export function NestHostSettings({
   onUpdateStatus,
   onRestart,
   onDelete,
+  onEdit,
   roomName,
 }: NestHostSettingsProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -62,6 +64,11 @@ export function NestHostSettings({
   const handleRestartClick = async () => {
     setIsDropdownOpen(false);
     await onRestart();
+  };
+
+  const handleEditClick = () => {
+    setIsDropdownOpen(false);
+    onEdit();
   };
 
   const handleStatusChange = async (status: 'open' | 'private' | 'closed') => {
@@ -128,6 +135,14 @@ export function NestHostSettings({
           <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
             Actions
           </div>
+          <DropdownMenuItem 
+            onClick={handleEditClick}
+            disabled={isAnyActionPending}
+            className="flex items-center gap-2"
+          >
+            <Edit className="h-4 w-4" />
+            Edit Nest
+          </DropdownMenuItem>
           <DropdownMenuItem 
             onClick={handleRestartClick}
             disabled={isAnyActionPending}

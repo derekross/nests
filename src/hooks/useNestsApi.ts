@@ -242,6 +242,50 @@ export function useGetNestInfo() {
 }
 
 /**
+ * Hook for deleting a nest (host only)
+ */
+export function useDeleteNest() {
+  const { user } = useCurrentUser();
+
+  return useMutation({
+    mutationFn: async (roomId: string): Promise<void> => {
+      if (!user) throw new Error('User must be logged in');
+
+      const url = `${NESTS_API_BASE}/${roomId}`;
+      console.log('Deleting nest:', { roomId, url });
+      
+      const authHeader = await createNip98AuthHeader(user, 'DELETE', url);
+      
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': authHeader,
+        },
+      });
+
+      console.log('Delete nest response:', { 
+        status: response.status, 
+        statusText: response.statusText,
+        url 
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => response.statusText);
+        console.error('Delete nest failed:', { status: response.status, errorText });
+        
+        if (response.status === 403) {
+          throw new Error('Only the host can delete the nest');
+        } else if (response.status === 404) {
+          throw new Error('Nest not found');
+        } else {
+          throw new Error(`Failed to delete nest: ${response.statusText}`);
+        }
+      }
+    },
+  });
+}
+
+/**
  * Creates a NIP-98 authorization header
  */
 async function createNip98AuthHeader(user: NUser, method: string, url: string, body?: string): Promise<string> {

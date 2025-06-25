@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { LoginArea } from '@/components/auth/LoginArea';
-import { RelaySelector } from '@/components/RelaySelector';
+
 import { NestCard } from '@/components/NestCard';
 import { CreateNestDialog } from '@/components/CreateNestDialog';
 import { NestRoom } from '@/components/NestRoom';
