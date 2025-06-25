@@ -13,7 +13,7 @@ import { useToast } from '@/hooks/useToast';
 import { useNest, useNestChat } from '@/hooks/useNests';
 import { useLiveKit } from '@/hooks/useLiveKit';
 import { useNestPresence } from '@/hooks/useNestPresence';
-import { useJoinNest, useJoinNestAsGuest, useJoinNestSmart, useRestartNest, useDeleteNest, useApiDiagnostics } from '@/hooks/useNestsApi';
+import { useJoinNestSmart, useRestartNest, useDeleteNest, useApiDiagnostics } from '@/hooks/useNestsApi';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { genUserName } from '@/lib/genUserName';
 import { 
@@ -30,6 +30,9 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { NestHostSettings } from '@/components/NestHostSettings';
 import { EditNestDialog } from '@/components/EditNestDialog';
 import { LoginArea } from '@/components/auth/LoginArea';
+import { ModerationPanel } from '@/components/ModerationPanel';
+import { SpeakingControls } from '@/components/SpeakingControls';
+import { SpeakingNotifications } from '@/components/SpeakingNotifications';
 
 import type { NostrEvent } from '@nostrify/nostrify';
 
@@ -86,8 +89,6 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
     isHandRaised,
   } = useLiveKit();
 
-  const { mutateAsync: joinNest } = useJoinNest();
-  const { mutateAsync: joinNestAsGuest } = useJoinNestAsGuest();
   const { mutateAsync: joinNestSmart } = useJoinNestSmart();
   const { mutateAsync: runDiagnostics, isPending: isDiagnosticsPending } = useApiDiagnostics();
   const { mutateAsync: restartNest, isPending: isRestarting } = useRestartNest();
@@ -500,6 +501,9 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
 
   return (
     <div className="h-screen flex flex-col">
+      {/* Speaking Notifications */}
+      <SpeakingNotifications nestNaddr={nestNaddr} />
+      
       {/* Header */}
       <div className="border-b bg-gradient-purple-soft p-3 sm:p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -518,19 +522,26 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
               {isConnected ? 'Connected' : 'Disconnected'}
             </Badge>
             {isHost && (
-              <NestHostSettings
-                currentStatus={currentStatus}
-                isUpdatingStatus={false}
-                isRestarting={isRestarting}
-                isDeleting={isDeleting}
-                isDeletingEvent={isDeletingEvent}
-                isConnecting={isConnecting}
-                onUpdateStatus={handleUpdateStatus}
-                onRestart={handleRestartNest}
-                onDelete={handleDeleteNest}
-                onEdit={handleEditNest}
-                roomName={roomName}
-              />
+              <>
+                <ModerationPanel
+                  nestNaddr={nestNaddr}
+                  isHost={!!isHost}
+                  participants={participants}
+                />
+                <NestHostSettings
+                  currentStatus={currentStatus}
+                  isUpdatingStatus={false}
+                  isRestarting={isRestarting}
+                  isDeleting={isDeleting}
+                  isDeletingEvent={isDeletingEvent}
+                  isConnecting={isConnecting}
+                  onUpdateStatus={handleUpdateStatus}
+                  onRestart={handleRestartNest}
+                  onDelete={handleDeleteNest}
+                  onEdit={handleEditNest}
+                  roomName={roomName}
+                />
+              </>
             )}
             <Button variant="outline" onClick={handleLeaveNest} size={isMobile ? "sm" : "default"}>
               {isMobile ? 'Leave' : 'Leave Nest'}
@@ -714,14 +725,13 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
           {isConnected && (
             <div className="border-t p-3 sm:p-4 bg-background">
               <div className="flex items-center justify-center gap-3 sm:gap-4">
-                <Button
-                  variant={isMicrophoneEnabled ? "default" : "secondary"}
-                  size={isMobile ? "default" : "lg"}
-                  onClick={toggleMicrophone}
-                  className={`rounded-full ${isMobile ? 'w-10 h-10' : 'w-12 h-12'} ${isMicrophoneEnabled ? 'bg-gradient-purple glow-purple' : ''}`}
-                >
-                  {isMicrophoneEnabled ? <Mic className="h-4 w-4 sm:h-5 sm:w-5" /> : <MicOff className="h-4 w-4 sm:h-5 sm:w-5" />}
-                </Button>
+                <SpeakingControls
+                  nestNaddr={nestNaddr}
+                  isHost={!!isHost}
+                  isMicrophoneEnabled={isMicrophoneEnabled}
+                  onToggleMicrophone={toggleMicrophone}
+                  onRestartSession={handleRestartNest}
+                />
                 
                 <Button
                   variant={isHandRaised ? "default" : "outline"}

@@ -32,6 +32,56 @@ interface NestInfo {
   recording: boolean;
 }
 
+interface DiagnosticCheck {
+  status?: number;
+  statusText?: string;
+  url?: string;
+  data?: unknown;
+  error?: string;
+  errorText?: string;
+}
+
+interface DiagnosticSummary {
+  passedChecks: number;
+  totalChecks: number;
+  allPassed: boolean;
+  roomExists: boolean;
+  guestAccessWorks: boolean;
+}
+
+interface DiagnosticsResult {
+  roomId: string;
+  apiBase: string;
+  timestamp: string;
+  checks: {
+    health?: DiagnosticCheck;
+    roomInfo?: DiagnosticCheck;
+    guestAccess?: DiagnosticCheck;
+  };
+  summary: DiagnosticSummary;
+}
+
+interface AttemptInfo {
+  type: string;
+  status: number;
+  statusText: string;
+  url: string;
+  timestamp: string;
+  errorText?: string;
+}
+
+interface DebugInfo {
+  roomId: string;
+  hasUser: boolean;
+  apiBase: string;
+  timestamp: string;
+  attempts: AttemptInfo[];
+  roomInfoCheck?: DiagnosticCheck;
+  roomInfo?: unknown;
+  roomInfoError?: string;
+  authError?: string;
+}
+
 const NESTS_API_BASE = process.env.NODE_ENV === 'production' 
   ? 'https://nostrnests.com/api/v1/nests'
   : 'http://localhost:5544/api/v1/nests';
@@ -248,8 +298,8 @@ export function useJoinNestSmart() {
   const { user } = useCurrentUser();
 
   return useMutation({
-    mutationFn: async (roomId: string): Promise<JoinNestResponse & { joinType: 'authenticated' | 'guest'; debugInfo: any }> => {
-      const debugInfo: any = {
+    mutationFn: async (roomId: string): Promise<JoinNestResponse & { joinType: 'authenticated' | 'guest'; debugInfo: DebugInfo }> => {
+      const debugInfo: DebugInfo = {
         roomId,
         hasUser: !!user,
         apiBase: NESTS_API_BASE,
@@ -298,7 +348,7 @@ export function useJoinNestSmart() {
             },
           });
 
-          const attemptInfo = {
+          const attemptInfo: AttemptInfo = {
             type: 'authenticated',
             status: response.status,
             statusText: response.statusText,
@@ -352,7 +402,7 @@ export function useJoinNestSmart() {
         method: 'GET',
       });
 
-      const guestAttemptInfo = {
+      const guestAttemptInfo: AttemptInfo = {
         type: 'guest',
         status: guestResponse.status,
         statusText: guestResponse.statusText,
@@ -374,7 +424,7 @@ export function useJoinNestSmart() {
         if (guestResponse.status === 404) {
           // Check if this is the specific "not found or no longer active" error
           // when we know the room actually exists (from room info check)
-          if (debugInfo.roomInfo && debugInfo.roomInfo.status === 'active') {
+          if (debugInfo.roomInfo && (debugInfo.roomInfo as { status?: string }).status === 'active') {
             throw new Error('🚨 API Server Issue Detected: The room exists and is active (confirmed via /info endpoint) but both guest and authenticated join are failing with 404 errors. This indicates a bug in the API server\'s join logic or LiveKit integration. Please check API server logs and LiveKit connectivity.');
           } else {
             throw new Error('Nest not found. The room may not be ready yet or has been closed.');
@@ -417,12 +467,19 @@ export function useGetNestInfo() {
  */
 export function useApiDiagnostics() {
   return useMutation({
-    mutationFn: async (roomId: string) => {
-      const diagnostics: any = {
+    mutationFn: async (roomId: string): Promise<DiagnosticsResult> => {
+      const diagnostics: DiagnosticsResult = {
         roomId,
         apiBase: NESTS_API_BASE,
         timestamp: new Date().toISOString(),
-        checks: {}
+        checks: {},
+        summary: {
+          passedChecks: 0,
+          totalChecks: 0,
+          allPassed: false,
+          roomExists: false,
+          guestAccessWorks: false,
+        }
       };
 
       console.log('🔧 Starting API diagnostics for room:', roomId);
@@ -504,8 +561,8 @@ export function useApiDiagnostics() {
       }
 
       // 4. Summary
-      const passedChecks = Object.values(diagnostics.checks).filter((check: any) => 
-        check.status >= 200 && check.status < 300
+      const passedChecks = Object.values(diagnostics.checks).filter((check) => 
+        check && check.status && check.status >= 200 && check.status < 300
       ).length;
       const totalChecks = Object.keys(diagnostics.checks).length;
       

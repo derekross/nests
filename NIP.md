@@ -96,6 +96,90 @@ Presence events signal when a user is actively participating in a nest. These ar
 }
 ```
 
+### Speaking Request (kind: 1833)
+
+Speaking request events are used by participants to request permission to speak in a nest. These events signal to the host that a user wants to participate in the audio conversation.
+
+**Required tags:**
+- `a`: Reference to the nest event (`30312:<pubkey>:<d-identifier>`)
+- `status`: Current status of the request (`requested`, `cancelled`)
+
+**Example:**
+```json
+{
+  "kind": 1833,
+  "tags": [
+    ["a", "30312:91cf9..4e5ca:abc123-def456", "", "root"],
+    ["status", "requested"]
+  ],
+  "content": ""
+}
+```
+
+### Speaking Permission (kind: 3979)
+
+Speaking permission events are used by hosts to grant, deny, or revoke speaking permissions for participants. These events control who can unmute their microphone and speak in the nest.
+
+**Required tags:**
+- `a`: Reference to the nest event (`30312:<pubkey>:<d-identifier>`)
+- `p`: Public key of the participant being granted/denied permission
+- `status`: Permission status (`granted`, `denied`, `revoked`)
+
+**Optional tags:**
+- `e`: Reference to the original speaking request event (when responding to a request)
+
+**Example:**
+```json
+{
+  "kind": 3979,
+  "tags": [
+    ["a", "30312:91cf9..4e5ca:abc123-def456", "", "root"],
+    ["p", "14aeb..8dad4"],
+    ["status", "granted"],
+    ["e", "abc123..def456"]
+  ],
+  "content": ""
+}
+```
+
+### Speaking Invitation (kind: 7051)
+
+Speaking invitation events are used by hosts to invite specific participants to speak, and by participants to accept or decline those invitations.
+
+**Required tags:**
+- `a`: Reference to the nest event (`30312:<pubkey>:<d-identifier>`)
+- `status`: Invitation status (`invited`, `accepted`, `declined`)
+
+**Conditional tags:**
+- `p`: Public key of the invited participant (required when status is "invited")
+- `e`: Reference to the original invitation event (required when status is "accepted" or "declined")
+
+**Example (Host inviting participant):**
+```json
+{
+  "kind": 7051,
+  "tags": [
+    ["a", "30312:91cf9..4e5ca:abc123-def456", "", "root"],
+    ["p", "14aeb..8dad4"],
+    ["status", "invited"]
+  ],
+  "content": ""
+}
+```
+
+**Example (Participant accepting invitation):**
+```json
+{
+  "kind": 7051,
+  "tags": [
+    ["a", "30312:91cf9..4e5ca:abc123-def456", "", "root"],
+    ["e", "invitation-event-id"],
+    ["status", "accepted"]
+  ],
+  "content": ""
+}
+```
+
 ## Implementation Details
 
 ### LiveKit Integration
@@ -122,10 +206,28 @@ Nests integrates with LiveKit for real-time audio communication:
 
 Nests implements a role-based permission system:
 
-- **Host**: Full nest management capabilities, can promote/demote users
-- **Moderator**: Can manage speakers and moderate content
-- **Speaker**: Can unmute and speak in the nest
-- **Listener**: Can listen and raise hand to request speaking privileges
+- **Host**: Full nest management capabilities, can invite participants to speak, grant/deny speaking requests, and revoke speaking permissions
+- **Moderator**: Can manage speakers and moderate content (future implementation)
+- **Speaker**: Can unmute and speak in the nest after receiving permission from the host
+- **Listener**: Can listen, raise hand to request speaking privileges, and respond to speaking invitations
+
+### Moderation Workflow
+
+The moderation system follows this workflow:
+
+1. **Request to Speak**: Participants can request speaking permission by publishing a kind 1833 event
+2. **Host Review**: Hosts see pending requests in the moderation panel and can grant or deny them
+3. **Permission Grant**: When granted, a kind 3979 event is published, allowing the participant to unmute
+4. **Invitation System**: Hosts can proactively invite participants using kind 7051 events
+5. **Session Restart**: When accepting an invitation, the participant's session restarts to enable microphone access
+6. **Permission Revocation**: Hosts can revoke speaking permissions at any time
+
+### Event Lifecycle
+
+- **Speaking requests** (kind 1833) are filtered to show only events from the last hour
+- **Speaking permissions** (kind 3979) remain active until explicitly revoked
+- **Speaking invitations** (kind 7051) expire after 1 hour if not responded to
+- All moderation events reference the parent nest using the `a` tag
 
 ### Cross-Client Compatibility
 
