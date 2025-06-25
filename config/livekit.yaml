@@ -1,0 +1,32 @@
+port: 7880
+bind_addresses:
+  - ""
+
+# RTC configuration
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+
+# Redis for clustering and persistence
+redis:
+  address: redis:6379
+  db: 0
+
+# API keys for authentication
+keys:
+  nests-api-key: nests-super-secret-key-change-in-production
+
+# Room configuration
+room:
+  auto_create: true
+  max_participants: 500
+  empty_timeout: 300
+  departure_timeout: 20
+
+# Logging
+log_level: info
+
+# Development settings
+development: true
