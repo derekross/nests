@@ -13,7 +13,8 @@ import { useToast } from '@/hooks/useToast';
 import { useNest, useNestChat } from '@/hooks/useNests';
 import { useLiveKit } from '@/hooks/useLiveKit';
 import { useNestPresence } from '@/hooks/useNestPresence';
-import { useJoinNest, useJoinNestAsGuest, useRestartNest, useDeleteNest } from '@/hooks/useNestsApi';
+import { useJoinNest, useJoinNestAsGuest, useJoinNestSmart, useRestartNest, useDeleteNest, useApiDiagnostics } from '@/hooks/useNestsApi';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { genUserName } from '@/lib/genUserName';
 import { 
   Mic, 
@@ -21,12 +22,14 @@ import {
   Hand, 
   Users, 
   MessageCircle, 
-  Send
+  Send,
+  User
 } from 'lucide-react';
 import { NoteContent } from '@/components/NoteContent';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { NestHostSettings } from '@/components/NestHostSettings';
 import { EditNestDialog } from '@/components/EditNestDialog';
+import { LoginArea } from '@/components/auth/LoginArea';
 
 import type { NostrEvent } from '@nostrify/nostrify';
 
@@ -85,8 +88,11 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
 
   const { mutateAsync: joinNest } = useJoinNest();
   const { mutateAsync: joinNestAsGuest } = useJoinNestAsGuest();
+  const { mutateAsync: joinNestSmart } = useJoinNestSmart();
+  const { mutateAsync: runDiagnostics, isPending: isDiagnosticsPending } = useApiDiagnostics();
   const { mutateAsync: restartNest, isPending: isRestarting } = useRestartNest();
   const { mutateAsync: deleteNest, isPending: isDeleting } = useDeleteNest();
+  const isMobile = useIsMobile();
 
   // Manage presence
   useNestPresence({
@@ -138,48 +144,69 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
     }
     
     try {
-      let token: string;
-      
       console.log('Attempting to join nest:', {
         roomId,
         liveKitUrl,
         nestNaddr,
-        user: user ? 'logged in' : 'guest'
+        user: user ? 'logged in' : 'guest',
+        nestStatus: currentStatus,
+        nestCreatedAt: nest?.created_at,
+        timeSinceCreated: nest ? Math.floor(Date.now() / 1000) - nest.created_at : 'unknown'
       });
       
-      if (user) {
-        const response = await joinNest(roomId);
-        token = response.token;
-        console.log('Join nest response:', { tokenType: typeof token, token });
-      } else {
-        const response = await joinNestAsGuest(roomId);
-        token = response.token;
-        console.log('Join nest as guest response:', { tokenType: typeof token, token });
-      }
+      // Use smart join that tries authenticated first, then falls back to guest
+      const response = await joinNestSmart(roomId);
+      const token = response.token;
+      
+      console.log('Smart join response:', { 
+        joinType: response.joinType,
+        tokenType: typeof token, 
+        hasToken: !!token,
+        debugInfo: response.debugInfo
+      });
 
       console.log('Connecting with join token:', {
         serverUrl: liveKitUrl,
         tokenType: typeof token,
-        hasToken: !!token
+        hasToken: !!token,
+        joinMethod: response.joinType
       });
 
       await connect({
         serverUrl: liveKitUrl,
         token,
       });
+      
+      // Show a toast if user was joined as guest when they expected authenticated access
+      if (user && response.joinType === 'guest') {
+        toast({
+          title: "Joined as Guest",
+          description: "You were connected as a guest. Some features may be limited.",
+          duration: 5000,
+        });
+      }
     } catch (err) {
       console.error('Failed to join nest:', err);
       console.error('Nest details:', {
         roomId,
         liveKitUrl,
         nestNaddr,
-        nestTags: nest?.tags
+        nestTags: nest?.tags,
+        nestStatus: currentStatus,
+        nestCreatedAt: nest?.created_at,
+        timeSinceCreated: nest ? Math.floor(Date.now() / 1000) - nest.created_at : 'unknown'
       });
       
       // Set user-friendly error message
       if (err instanceof Error) {
         if (err.message.includes('Not Found') || err.message.includes('404') || err.message.includes('no longer active')) {
-          setJoinError('This nest is no longer available. The audio session may have timed out or been closed.');
+          // Check if this is a timing issue - nest was just created
+          const timeSinceCreated = nest ? Math.floor(Date.now() / 1000) - nest.created_at : 0;
+          if (timeSinceCreated < 30) {
+            setJoinError('The nest is still starting up. Please wait a moment and try again.');
+          } else {
+            setJoinError('This nest is no longer available. The audio session may have timed out or been closed.');
+          }
         } else if (err.message.includes('Unauthorized') || err.message.includes('401')) {
           setJoinError('You are not authorized to join this nest.');
         } else if (err.message.includes('Forbidden') || err.message.includes('403')) {
@@ -420,6 +447,47 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
     queryClient.invalidateQueries({ queryKey: ['nests'] });
   };
 
+  const handleRunDiagnostics = async () => {
+    if (!roomId) return;
+    
+    try {
+      console.log('🔧 Starting comprehensive diagnostics...');
+      const diagnostics = await runDiagnostics(roomId);
+      
+      console.log('🔧 Diagnostics completed:', diagnostics);
+      
+      // Show detailed results in toast
+      const { summary } = diagnostics;
+      const status = summary.allPassed ? 'success' : 'warning';
+      
+      toast({
+        title: `Diagnostics Complete (${summary.passedChecks}/${summary.totalChecks})`,
+        description: `Room exists: ${summary.roomExists ? '✅' : '❌'} | Guest access: ${summary.guestAccessWorks ? '✅' : '❌'}`,
+        variant: status === 'warning' ? 'destructive' : 'default',
+        duration: 10000,
+      });
+      
+      // If room exists but join is failing, suggest specific actions
+      if (summary.roomExists && !summary.guestAccessWorks) {
+        toast({
+          title: "Room Found But Access Failed",
+          description: "The room exists in the API but access is failing. This suggests an API/LiveKit sync issue.",
+          variant: "destructive",
+          duration: 15000,
+        });
+      }
+      
+    } catch (error) {
+      console.error('🔧 Diagnostics failed:', error);
+      toast({
+        title: "Diagnostics Failed",
+        description: "Check console for detailed error information.",
+        variant: "destructive",
+        duration: 5000,
+      });
+    }
+  };
+
 
 
   if (!nest) {
@@ -433,19 +501,19 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   return (
     <div className="h-screen flex flex-col">
       {/* Header */}
-      <div className="border-b bg-gradient-purple-soft p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gradient-purple">{roomName}</h1>
+      <div className="border-b bg-gradient-purple-soft p-3 sm:p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-lg sm:text-2xl font-bold text-gradient-purple truncate">{roomName}</h1>
             {summary && (
-              <p className="text-muted-foreground">{summary}</p>
+              <p className="text-sm text-muted-foreground line-clamp-2 sm:line-clamp-1">{summary}</p>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
+          <div className="flex items-center gap-2 flex-wrap">
+            {!isMobile && <ThemeToggle />}
             <Badge 
               variant={isConnected ? "default" : "secondary"}
-              className={isConnected ? "bg-green-500 hover:bg-green-600" : ""}
+              className={`text-xs ${isConnected ? "bg-green-500 hover:bg-green-600" : ""}`}
             >
               {isConnected ? 'Connected' : 'Disconnected'}
             </Badge>
@@ -464,56 +532,109 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
                 roomName={roomName}
               />
             )}
-            <Button variant="outline" onClick={handleLeaveNest}>
-              Leave Nest
+            <Button variant="outline" onClick={handleLeaveNest} size={isMobile ? "sm" : "default"}>
+              {isMobile ? 'Leave' : 'Leave Nest'}
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 flex">
-        {/* Main content */}
-        <div className="flex-1 flex flex-col">
+      {/* Mobile: Vertical layout, Desktop: Horizontal layout */}
+      <div className={`flex-1 ${isMobile ? 'flex flex-col' : 'flex'}`}>
+        {/* Voice Chat Section */}
+        <div className={`${isMobile ? 'flex-1' : 'flex-1'} flex flex-col`}>
           {/* Connection status */}
           {!isConnected && (
-            <div className="p-4 bg-muted/50">
+            <div className="p-3 sm:p-4 bg-muted/50">
               <div className="text-center">
                 {(error || joinError) && (
-                  <div className="text-red-600 mb-4 p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-200 dark:border-red-800">
-                    <p className="font-medium mb-1">Connection Error</p>
-                    <p className="text-sm">{joinError || error}</p>
-                    {joinError?.includes('no longer available') && (
-                      <div className="text-xs mt-2 text-red-500 space-y-1">
-                        <p>This usually happens when:</p>
-                        <ul className="list-disc list-inside ml-2 space-y-1">
-                          <li>The nest session has ended</li>
-                          <li>The host hasn't started the audio server yet</li>
-                          <li>There's a sync issue between Nostr and the audio service</li>
-                        </ul>
-                        <p className="mt-2">Try refreshing the page or contact the nest host.</p>
-                        <div className="mt-3 p-2 bg-blue-50 dark:bg-blue-950/20 rounded border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300">
-                          <p className="text-xs font-medium">Debug Info:</p>
-                          <p className="text-xs">Room ID: {roomId}</p>
-                          <p className="text-xs">API Base: {process.env.NODE_ENV === 'production' ? 'https://nostrnests.com/api/v1/nests' : 'http://localhost:5544/api/v1/nests'}</p>
-                          <p className="text-xs">Nest found on Nostr: {nest ? 'Yes' : 'No'}</p>
-                          <p className="text-xs">LiveKit URL: {liveKitUrl ? 'Found' : 'Missing'}</p>
+                  <div className="mb-4">
+                    {/* Guest access denied - encourage sign in */}
+                    {!user && joinError?.includes('Not Found') && (
+                      <div className="p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                        <div className="flex items-center justify-center mb-3">
+                          <User className="h-8 w-8 text-blue-600 dark:text-blue-400" />
                         </div>
+                        <h3 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">
+                          Sign in to join this nest
+                        </h3>
+                        <p className="text-sm text-blue-700 dark:text-blue-300 mb-4">
+                          This nest requires you to be signed in to participate in the audio conversation. 
+                          Sign in with your Nostr account to join the discussion.
+                        </p>
+                        <div className="space-y-3">
+                          <LoginArea className="max-w-60 mx-auto" />
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            Don't have a Nostr account? The login dialog will help you get started.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Other errors */}
+                    {(user || !joinError?.includes('Not Found')) && (
+                      <div className="text-red-600 p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-200 dark:border-red-800">
+                        <p className="font-medium mb-1">Connection Error</p>
+                        <p className="text-sm">{joinError || error}</p>
+                        {joinError?.includes('no longer available') && !isMobile && (
+                          <div className="text-xs mt-2 text-red-500 space-y-1">
+                            <p>This usually happens when:</p>
+                            <ul className="list-disc list-inside ml-2 space-y-1">
+                              <li>The nest session has ended</li>
+                              <li>The host hasn't started the audio server yet</li>
+                              <li>There's a sync issue between Nostr and the audio service</li>
+                            </ul>
+                            <p className="mt-2">Try refreshing the page or contact the nest host.</p>
+                            <div className="mt-3 p-2 bg-blue-50 dark:bg-blue-950/20 rounded border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300">
+                              <p className="text-xs font-medium">Debug Info:</p>
+                              <p className="text-xs">Room ID: {roomId}</p>
+                              <p className="text-xs">API Base: {process.env.NODE_ENV === 'production' ? 'https://nostrnests.com/api/v1/nests' : 'http://localhost:5544/api/v1/nests'}</p>
+                              <p className="text-xs">Nest found on Nostr: {nest ? 'Yes' : 'No'}</p>
+                              <p className="text-xs">LiveKit URL: {liveKitUrl ? 'Found' : 'Missing'}</p>
+                              <p className="text-xs">Nest Status: {currentStatus}</p>
+                              <p className="text-xs">Created: {nest ? new Date(nest.created_at * 1000).toLocaleString() : 'Unknown'}</p>
+                              <p className="text-xs">Age: {nest ? Math.floor((Date.now() / 1000) - nest.created_at) : 'Unknown'}s</p>
+                              <div className="mt-2">
+                                <Button
+                                  onClick={handleRunDiagnostics}
+                                  disabled={isDiagnosticsPending || !roomId}
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-xs"
+                                >
+                                  {isDiagnosticsPending ? 'Running...' : 'Run API Diagnostics'}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
                 )}
                 <div className="space-y-3">
+                  {/* Show different button text based on user status */}
                   <Button 
                     onClick={handleJoinNest}
                     disabled={isConnecting || !liveKitUrl}
-                    size="lg"
-                    className="bg-gradient-purple hover:opacity-90 glow-purple"
+                    size={isMobile ? "default" : "lg"}
+                    className="bg-gradient-purple hover:opacity-90 glow-purple w-full sm:w-auto"
                   >
                     {isConnecting ? 'Connecting...' : 'Join Audio'}
                   </Button>
                   
+                  {/* Show sign-in encouragement for guests */}
+                  {!user && !joinError && (
+                    <div className="text-center">
+                      <p className="text-xs text-muted-foreground mb-2">
+                        For the best experience, sign in:
+                      </p>
+                      <LoginArea className="max-w-48 mx-auto" />
+                    </div>
+                  )}
+                  
                   {joinError && (
-                    <div className="flex gap-2">
+                    <div className={`flex gap-2 ${isMobile ? 'flex-col' : 'flex-row'}`}>
                       {isHost && (joinError.includes('no longer available') || joinError.includes('no longer active') || joinError.includes('timed out')) && (
                         <Button 
                           onClick={handleRestartNest}
@@ -525,7 +646,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
                           {isRestarting ? 'Restarting...' : 'Restart Nest'}
                         </Button>
                       )}
-                      {!isHost && (joinError.includes('no longer available') || joinError.includes('timeout')) && (
+                      {!isHost && (joinError.includes('no longer available') || joinError.includes('timeout') || joinError.includes('still starting up')) && (
                         <Button 
                           onClick={handleJoinNest}
                           disabled={isConnecting}
@@ -536,6 +657,15 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
                           {isConnecting ? 'Retrying...' : 'Retry Connection'}
                         </Button>
                       )}
+                      <Button
+                        onClick={handleRunDiagnostics}
+                        disabled={isDiagnosticsPending || !roomId}
+                        variant="outline"
+                        size="sm"
+                        className="bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border-yellow-300"
+                      >
+                        {isDiagnosticsPending ? 'Diagnosing...' : 'Diagnose Issue'}
+                      </Button>
                       <Button 
                         onClick={handleLeaveNest}
                         variant="outline"
@@ -551,7 +681,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
                     No LiveKit URL found for this nest
                   </p>
                 )}
-                {roomId && (
+                {roomId && !isMobile && (
                   <p className="text-xs text-muted-foreground mt-2">
                     Room ID: {roomId}
                   </p>
@@ -561,18 +691,19 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
           )}
 
           {/* Participants */}
-          <div className="flex-1 p-4">
+          <div className="flex-1 p-3 sm:p-4 overflow-y-auto">
             <div className="mb-4">
-              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                <Users className="h-5 w-5" />
+              <h3 className="text-base sm:text-lg font-semibold mb-2 flex items-center gap-2">
+                <Users className="h-4 w-4 sm:h-5 sm:w-5" />
                 Participants ({participants.length})
               </h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              <div className={`grid gap-3 sm:gap-4 ${isMobile ? 'grid-cols-2' : 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4'}`}>
                 {participants.map((participant) => (
                   <ParticipantCard 
                     key={participant.sid}
                     participant={participant}
                     isHandRaised={raisedHands.has(participant.sid)}
+                    isMobile={isMobile}
                   />
                 ))}
               </div>
@@ -581,48 +712,58 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
 
           {/* Controls */}
           {isConnected && (
-            <div className="border-t p-4">
-              <div className="flex items-center justify-center gap-4">
+            <div className="border-t p-3 sm:p-4 bg-background">
+              <div className="flex items-center justify-center gap-3 sm:gap-4">
                 <Button
                   variant={isMicrophoneEnabled ? "default" : "secondary"}
-                  size="lg"
+                  size={isMobile ? "default" : "lg"}
                   onClick={toggleMicrophone}
-                  className={`rounded-full w-12 h-12 ${isMicrophoneEnabled ? 'bg-gradient-purple glow-purple' : ''}`}
+                  className={`rounded-full ${isMobile ? 'w-10 h-10' : 'w-12 h-12'} ${isMicrophoneEnabled ? 'bg-gradient-purple glow-purple' : ''}`}
                 >
-                  {isMicrophoneEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+                  {isMicrophoneEnabled ? <Mic className="h-4 w-4 sm:h-5 sm:w-5" /> : <MicOff className="h-4 w-4 sm:h-5 sm:w-5" />}
                 </Button>
                 
                 <Button
                   variant={isHandRaised ? "default" : "outline"}
-                  size="lg"
+                  size={isMobile ? "default" : "lg"}
                   onClick={toggleRaisedHand}
-                  className={`rounded-full w-12 h-12 ${isHandRaised ? 'bg-yellow-500 hover:bg-yellow-600 text-white' : ''}`}
+                  className={`rounded-full ${isMobile ? 'w-10 h-10' : 'w-12 h-12'} ${isHandRaised ? 'bg-yellow-500 hover:bg-yellow-600 text-white' : ''}`}
                 >
-                  <Hand className="h-5 w-5" />
+                  <Hand className="h-4 w-4 sm:h-5 sm:w-5" />
                 </Button>
 
                 <Button
-                  variant="outline"
-                  size="lg"
+                  variant={showChat ? "default" : "outline"}
+                  size={isMobile ? "default" : "lg"}
                   onClick={() => setShowChat(!showChat)}
-                  className="rounded-full w-12 h-12 hover:bg-primary/10"
+                  className={`rounded-full ${isMobile ? 'w-10 h-10' : 'w-12 h-12'} ${showChat ? 'bg-primary' : 'hover:bg-primary/10'}`}
                 >
-                  <MessageCircle className="h-5 w-5" />
+                  <MessageCircle className="h-4 w-4 sm:h-5 sm:w-5" />
                 </Button>
               </div>
             </div>
           )}
         </div>
 
-        {/* Chat sidebar */}
+        {/* Chat Section */}
         {showChat && (
-          <div className="w-80 border-l flex flex-col">
-            <div className="p-4 border-b">
+          <div className={`${isMobile ? 'h-80 border-t' : 'w-80 border-l'} flex flex-col bg-background`}>
+            <div className="p-3 sm:p-4 border-b bg-muted/30">
               <div className="flex items-center justify-between">
-                <h3 className="font-semibold">Chat</h3>
+                <h3 className="font-semibold text-sm sm:text-base">Chat</h3>
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                   <span className="text-xs text-muted-foreground">Live</span>
+                  {isMobile && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowChat(false)}
+                      className="ml-2 h-6 w-6 p-0"
+                    >
+                      ×
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>
@@ -630,39 +771,50 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
             <div className="flex-1 overflow-hidden">
               <div 
                 ref={chatScrollRef}
-                className="h-full overflow-y-auto p-4 space-y-4"
+                className="h-full overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4"
               >
                 {chatMessages.length === 0 ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    <MessageCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p className="text-sm">No messages yet</p>
+                  <div className="text-center text-muted-foreground py-6 sm:py-8">
+                    <MessageCircle className="h-6 w-6 sm:h-8 sm:w-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-xs sm:text-sm">No messages yet</p>
                     <p className="text-xs">Start the conversation!</p>
                   </div>
                 ) : (
                   chatMessages.map((message) => (
-                    <ChatMessage key={message.id} message={message} />
+                    <ChatMessage key={message.id} message={message} isMobile={isMobile} />
                   ))
                 )}
               </div>
             </div>
 
-            {user && (
-              <div className="p-4 border-t">
+            {user ? (
+              <div className="p-3 sm:p-4 border-t bg-muted/30">
                 <div className="flex gap-2">
                   <Input
                     value={chatMessage}
                     onChange={(e) => setChatMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder="Type a message..."
-                    className="flex-1"
+                    className="flex-1 text-sm"
                   />
                   <Button 
                     onClick={handleSendMessage}
                     disabled={!chatMessage.trim()}
                     size="sm"
+                    className="px-3"
                   >
-                    <Send className="h-4 w-4" />
+                    <Send className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 sm:p-4 border-t bg-muted/30">
+                <div className="text-center space-y-3">
+                  <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                    <MessageCircle className="h-4 w-4" />
+                    <span className="text-sm">Sign in to join the chat</span>
+                  </div>
+                  <LoginArea className="max-w-48 mx-auto" />
                 </div>
               </div>
             )}
@@ -683,14 +835,15 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   );
 }
 
-function ParticipantCard({ participant, isHandRaised }: { 
+function ParticipantCard({ participant, isHandRaised, isMobile }: { 
   participant: {
     identity?: string;
     sid: string;
     isSpeaking?: boolean;
     getTrackPublication?: (source: string) => { isMuted?: boolean } | undefined;
   }; 
-  isHandRaised: boolean; 
+  isHandRaised: boolean;
+  isMobile?: boolean;
 }) {
   // Extract pubkey from participant identity (if available)
   const pubkey = participant.identity || participant.sid;
@@ -702,31 +855,31 @@ function ParticipantCard({ participant, isHandRaised }: {
   const isMuted = participant.getTrackPublication?.('microphone')?.isMuted ?? true;
 
   return (
-    <Card className={`p-3 transition-all duration-200 ${isHandRaised ? 'ring-2 ring-yellow-500 bg-yellow-50 dark:bg-yellow-950/20' : 'hover:shadow-md hover:shadow-primary/10'}`}>
-      <div className="flex flex-col items-center text-center space-y-2">
+    <Card className={`${isMobile ? 'p-2' : 'p-3'} transition-all duration-200 ${isHandRaised ? 'ring-2 ring-yellow-500 bg-yellow-50 dark:bg-yellow-950/20' : 'hover:shadow-md hover:shadow-primary/10'}`}>
+      <div className={`flex flex-col items-center text-center ${isMobile ? 'space-y-1' : 'space-y-2'}`}>
         <div className="relative">
-          <Avatar className="h-12 w-12 ring-2 ring-primary/20">
+          <Avatar className={`${isMobile ? 'h-8 w-8' : 'h-12 w-12'} ring-2 ring-primary/20`}>
             <AvatarImage src={avatar} />
-            <AvatarFallback className="bg-gradient-purple text-white">
+            <AvatarFallback className="bg-gradient-purple text-white text-xs">
               {displayName.slice(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
           {isSpeaking && (
-            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-white animate-pulse" />
+            <div className={`absolute -bottom-1 -right-1 ${isMobile ? 'w-3 h-3' : 'w-4 h-4'} bg-green-500 rounded-full border-2 border-white animate-pulse`} />
           )}
           {isHandRaised && (
             <div className="absolute -top-1 -right-1 animate-bounce">
-              <Hand className="h-4 w-4 text-yellow-500" />
+              <Hand className={`${isMobile ? 'h-3 w-3' : 'h-4 w-4'} text-yellow-500`} />
             </div>
           )}
         </div>
         <div className="min-w-0 w-full">
-          <p className="text-sm font-medium truncate">{displayName}</p>
+          <p className={`${isMobile ? 'text-xs' : 'text-sm'} font-medium truncate`}>{displayName}</p>
           <div className="flex items-center justify-center gap-1 mt-1">
             {isMuted ? (
-              <MicOff className="h-3 w-3 text-muted-foreground" />
+              <MicOff className={`${isMobile ? 'h-2.5 w-2.5' : 'h-3 w-3'} text-muted-foreground`} />
             ) : (
-              <Mic className="h-3 w-3 text-green-600" />
+              <Mic className={`${isMobile ? 'h-2.5 w-2.5' : 'h-3 w-3'} text-green-600`} />
             )}
           </div>
         </div>
@@ -735,14 +888,14 @@ function ParticipantCard({ participant, isHandRaised }: {
   );
 }
 
-function ChatMessage({ message }: { message: NostrEvent }) {
+function ChatMessage({ message, isMobile }: { message: NostrEvent; isMobile?: boolean }) {
   const author = useAuthor(message.pubkey);
   const displayName = author.data?.metadata?.name || genUserName(message.pubkey);
   const avatar = author.data?.metadata?.picture;
 
   return (
-    <div className="flex gap-3">
-      <Avatar className="h-8 w-8 flex-shrink-0">
+    <div className={`flex ${isMobile ? 'gap-2' : 'gap-3'}`}>
+      <Avatar className={`${isMobile ? 'h-6 w-6' : 'h-8 w-8'} flex-shrink-0`}>
         <AvatarImage src={avatar} />
         <AvatarFallback className="text-xs">
           {displayName.slice(0, 2).toUpperCase()}
@@ -750,12 +903,15 @@ function ChatMessage({ message }: { message: NostrEvent }) {
       </Avatar>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-medium">{displayName}</span>
-          <span className="text-xs text-muted-foreground">
-            {new Date(message.created_at * 1000).toLocaleTimeString()}
+          <span className={`${isMobile ? 'text-xs' : 'text-sm'} font-medium truncate`}>{displayName}</span>
+          <span className="text-xs text-muted-foreground flex-shrink-0">
+            {new Date(message.created_at * 1000).toLocaleTimeString([], { 
+              hour: '2-digit', 
+              minute: '2-digit' 
+            })}
           </span>
         </div>
-        <div className="text-sm">
+        <div className={`${isMobile ? 'text-xs' : 'text-sm'}`}>
           <NoteContent event={message} />
         </div>
       </div>

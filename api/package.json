@@ -9,12 +9,16 @@
     "lint": "eslint .",
     "build": "echo 'No build step required'"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "nostr",
+    "livekit",
+    "audio",
+    "nests",
+    "webrtc"
+  ],
+  "author": "Nests Team",
   "license": "ISC",
   "description": "Nests API backend for LiveKit integration",
-  "keywords": ["nostr", "livekit", "audio", "nests", "webrtc"],
-  "author": "Nests Team",
   "engines": {
     "node": ">=18.0.0"
   },
@@ -28,6 +32,7 @@
     "joi": "^17.13.3",
     "livekit-server-sdk": "^2.13.1",
     "morgan": "^1.10.0",
+    "node-fetch": "^3.3.2",
     "nostr-tools": "^2.15.0",
     "redis": "^5.5.6",
     "uuid": "^11.1.0",

@@ -97,7 +97,17 @@ export function useJoinNest() {
       if (!response.ok) {
         const errorText = await response.text().catch(() => response.statusText);
         console.error('Join nest failed:', { status: response.status, errorText });
-        throw new Error(`Failed to join nest: ${response.statusText}`);
+        
+        // Provide more specific error messages based on status code
+        if (response.status === 404) {
+          throw new Error('Nest not found. The room may not be ready yet or has been closed.');
+        } else if (response.status === 401) {
+          throw new Error('Authentication failed. Please try logging in again.');
+        } else if (response.status === 403) {
+          throw new Error('Access denied. You may not have permission to join this nest.');
+        } else {
+          throw new Error(`Failed to join nest: ${response.statusText}`);
+        }
       }
 
       return response.json();
@@ -127,7 +137,15 @@ export function useJoinNestAsGuest() {
       if (!response.ok) {
         const errorText = await response.text().catch(() => response.statusText);
         console.error('Join nest as guest failed:', { status: response.status, errorText });
-        throw new Error(`Failed to join nest as guest: ${response.statusText}`);
+        
+        // Provide more specific error messages for guest access
+        if (response.status === 404) {
+          throw new Error('Nest not found. The room may not be ready yet or has been closed.');
+        } else if (response.status === 403) {
+          throw new Error('Guest access is not allowed for this nest.');
+        } else {
+          throw new Error(`Failed to join nest as guest: ${response.statusText}`);
+        }
       }
 
       return response.json();
@@ -223,6 +241,159 @@ export function useRestartNest() {
 }
 
 /**
+ * Hook for joining a nest with intelligent fallback
+ * Tries authenticated join first, falls back to guest if needed
+ */
+export function useJoinNestSmart() {
+  const { user } = useCurrentUser();
+
+  return useMutation({
+    mutationFn: async (roomId: string): Promise<JoinNestResponse & { joinType: 'authenticated' | 'guest'; debugInfo: any }> => {
+      const debugInfo: any = {
+        roomId,
+        hasUser: !!user,
+        apiBase: NESTS_API_BASE,
+        timestamp: new Date().toISOString(),
+        attempts: []
+      };
+
+      console.log('🔍 Smart join attempt:', debugInfo);
+
+      // First, let's check if the room info endpoint works (no auth required)
+      try {
+        const infoUrl = `${NESTS_API_BASE}/${roomId}/info`;
+        console.log('🔍 Checking room info:', infoUrl);
+        
+        const infoResponse = await fetch(infoUrl, { method: 'GET' });
+        debugInfo.roomInfoCheck = {
+          status: infoResponse.status,
+          statusText: infoResponse.statusText,
+          url: infoUrl
+        };
+        
+        if (infoResponse.ok) {
+          const roomInfo = await infoResponse.json();
+          debugInfo.roomInfo = roomInfo;
+          console.log('✅ Room info found:', roomInfo);
+        } else {
+          console.log('❌ Room info failed:', debugInfo.roomInfoCheck);
+        }
+      } catch (error) {
+        debugInfo.roomInfoError = error instanceof Error ? error.message : 'Unknown error';
+        console.log('❌ Room info check error:', error);
+      }
+
+      // If user is logged in, try authenticated join first
+      if (user) {
+        try {
+          const url = `${NESTS_API_BASE}/${roomId}`;
+          console.log('🔐 Trying authenticated join:', { roomId, url });
+          
+          const authHeader = await createNip98AuthHeader(user, 'GET', url);
+          
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+              'Authorization': authHeader,
+            },
+          });
+
+          const attemptInfo = {
+            type: 'authenticated',
+            status: response.status,
+            statusText: response.statusText,
+            url,
+            timestamp: new Date().toISOString()
+          };
+          debugInfo.attempts.push(attemptInfo);
+
+          console.log('🔐 Authenticated join response:', attemptInfo);
+
+          if (response.ok) {
+            const result = await response.json();
+            console.log('✅ Authenticated join successful');
+            return { ...result, joinType: 'authenticated', debugInfo };
+          }
+
+          // If authenticated join fails with 404, try guest access as fallback
+          if (response.status === 404) {
+            console.log('⚠️ Authenticated join failed with 404, trying guest access...');
+            // Fall through to guest attempt below
+          } else {
+            // For other errors, throw immediately
+            const errorText = await response.text().catch(() => response.statusText);
+            attemptInfo.errorText = errorText;
+            console.error('❌ Authenticated join failed:', attemptInfo);
+            
+            if (response.status === 401) {
+              throw new Error('Authentication failed. Please try logging in again.');
+            } else if (response.status === 403) {
+              throw new Error('Access denied. You may not have permission to join this nest.');
+            } else {
+              throw new Error(`Failed to join nest: ${response.statusText}`);
+            }
+          }
+        } catch (error) {
+          // If it's not a 404 error, re-throw it
+          if (error instanceof Error && !error.message.includes('404')) {
+            debugInfo.authError = error.message;
+            throw error;
+          }
+          console.log('⚠️ Authenticated join failed, trying guest access...');
+          // Fall through to guest attempt
+        }
+      }
+
+      // Try guest access (either user not logged in, or authenticated join failed with 404)
+      const guestUrl = `${NESTS_API_BASE}/${roomId}/guest`;
+      console.log('👤 Trying guest join:', { roomId, url: guestUrl });
+      
+      const guestResponse = await fetch(guestUrl, {
+        method: 'GET',
+      });
+
+      const guestAttemptInfo = {
+        type: 'guest',
+        status: guestResponse.status,
+        statusText: guestResponse.statusText,
+        url: guestUrl,
+        timestamp: new Date().toISOString()
+      };
+      debugInfo.attempts.push(guestAttemptInfo);
+
+      console.log('👤 Guest join response:', guestAttemptInfo);
+
+      if (!guestResponse.ok) {
+        const errorText = await guestResponse.text().catch(() => guestResponse.statusText);
+        guestAttemptInfo.errorText = errorText;
+        console.error('❌ Guest join failed:', guestAttemptInfo);
+        
+        // Log comprehensive debug info before throwing
+        console.error('🚨 Complete debug info:', debugInfo);
+        
+        if (guestResponse.status === 404) {
+          // Check if this is the specific "not found or no longer active" error
+          // when we know the room actually exists (from room info check)
+          if (debugInfo.roomInfo && debugInfo.roomInfo.status === 'active') {
+            throw new Error('🚨 API Server Issue Detected: The room exists and is active (confirmed via /info endpoint) but both guest and authenticated join are failing with 404 errors. This indicates a bug in the API server\'s join logic or LiveKit integration. Please check API server logs and LiveKit connectivity.');
+          } else {
+            throw new Error('Nest not found. The room may not be ready yet or has been closed.');
+          }
+        } else if (guestResponse.status === 403) {
+          throw new Error('Guest access is not allowed for this nest.');
+        } else {
+          throw new Error(`Failed to join nest as guest: ${guestResponse.statusText}`);
+        }
+      }
+
+      const result = await guestResponse.json();
+      console.log('✅ Guest join successful');
+      return { ...result, joinType: 'guest', debugInfo };
+    },
+  });
+}
+
+/**
  * Hook for getting nest info
  */
 export function useGetNestInfo() {
@@ -237,6 +408,119 @@ export function useGetNestInfo() {
       }
 
       return response.json();
+    },
+  });
+}
+
+/**
+ * Hook for comprehensive API diagnostics
+ */
+export function useApiDiagnostics() {
+  return useMutation({
+    mutationFn: async (roomId: string) => {
+      const diagnostics: any = {
+        roomId,
+        apiBase: NESTS_API_BASE,
+        timestamp: new Date().toISOString(),
+        checks: {}
+      };
+
+      console.log('🔧 Starting API diagnostics for room:', roomId);
+
+      // 1. Check API health (if health endpoint exists)
+      try {
+        const healthUrl = NESTS_API_BASE.replace('/api/v1/nests', '/health');
+        console.log('🔧 Checking API health:', healthUrl);
+        
+        const healthResponse = await fetch(healthUrl, { method: 'GET' });
+        diagnostics.checks.health = {
+          status: healthResponse.status,
+          statusText: healthResponse.statusText,
+          url: healthUrl
+        };
+        
+        if (healthResponse.ok) {
+          const healthData = await healthResponse.json().catch(() => null);
+          diagnostics.checks.health.data = healthData;
+          console.log('✅ API health check passed:', healthData);
+        } else {
+          console.log('⚠️ API health check failed:', diagnostics.checks.health);
+        }
+      } catch (error) {
+        diagnostics.checks.health = { error: error instanceof Error ? error.message : 'Unknown error' };
+        console.log('❌ API health check error:', error);
+      }
+
+      // 2. Check room info endpoint
+      try {
+        const infoUrl = `${NESTS_API_BASE}/${roomId}/info`;
+        console.log('🔧 Checking room info:', infoUrl);
+        
+        const infoResponse = await fetch(infoUrl, { method: 'GET' });
+        diagnostics.checks.roomInfo = {
+          status: infoResponse.status,
+          statusText: infoResponse.statusText,
+          url: infoUrl
+        };
+        
+        if (infoResponse.ok) {
+          const roomInfo = await infoResponse.json();
+          diagnostics.checks.roomInfo.data = roomInfo;
+          console.log('✅ Room info check passed:', roomInfo);
+        } else {
+          const errorText = await infoResponse.text().catch(() => infoResponse.statusText);
+          diagnostics.checks.roomInfo.errorText = errorText;
+          console.log('❌ Room info check failed:', diagnostics.checks.roomInfo);
+        }
+      } catch (error) {
+        diagnostics.checks.roomInfo = { error: error instanceof Error ? error.message : 'Unknown error' };
+        console.log('❌ Room info check error:', error);
+      }
+
+      // 3. Check guest endpoint
+      try {
+        const guestUrl = `${NESTS_API_BASE}/${roomId}/guest`;
+        console.log('🔧 Checking guest endpoint:', guestUrl);
+        
+        const guestResponse = await fetch(guestUrl, { method: 'GET' });
+        diagnostics.checks.guestAccess = {
+          status: guestResponse.status,
+          statusText: guestResponse.statusText,
+          url: guestUrl
+        };
+        
+        if (guestResponse.ok) {
+          const guestData = await guestResponse.json();
+          diagnostics.checks.guestAccess.data = guestData;
+          console.log('✅ Guest access check passed');
+        } else {
+          const errorText = await guestResponse.text().catch(() => guestResponse.statusText);
+          diagnostics.checks.guestAccess.errorText = errorText;
+          console.log('❌ Guest access check failed:', diagnostics.checks.guestAccess);
+        }
+      } catch (error) {
+        diagnostics.checks.guestAccess = { error: error instanceof Error ? error.message : 'Unknown error' };
+        console.log('❌ Guest access check error:', error);
+      }
+
+      // 4. Summary
+      const passedChecks = Object.values(diagnostics.checks).filter((check: any) => 
+        check.status >= 200 && check.status < 300
+      ).length;
+      const totalChecks = Object.keys(diagnostics.checks).length;
+      
+      diagnostics.summary = {
+        passedChecks,
+        totalChecks,
+        allPassed: passedChecks === totalChecks,
+        roomExists: diagnostics.checks.roomInfo?.status === 200,
+        guestAccessWorks: diagnostics.checks.guestAccess?.status === 200
+      };
+
+      console.log('🔧 Diagnostics complete:', diagnostics.summary);
+      console.log('🔧 Full diagnostics:', diagnostics);
+
+      return diagnostics;
     },
   });
 }

@@ -198,7 +198,7 @@ app.put('/api/v1/nests', requireAuth, async (req, res) => {
       roomRecord: true,
     });
 
-    const jwt = token.toJwt();
+    const jwt = await token.toJwt();
 
     // Store room info in Redis
     const roomInfo = {
@@ -233,6 +233,61 @@ app.put('/api/v1/nests', requireAuth, async (req, res) => {
   }
 });
 
+// Join nest as guest (no authentication) - MUST come before authenticated route
+app.get('/api/v1/nests/:roomId/guest', async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    console.log(`Guest endpoint called for room: ${roomId}`);
+
+    // Check if room exists by listing all rooms and finding the one with matching name
+    try {
+      logger.info(`Guest join: About to call roomService.listRooms() for room ${roomId}`);
+      const rooms = await roomService.listRooms();
+      logger.info(`Guest join: Found ${rooms.length} active rooms`);
+      rooms.forEach(room => {
+        logger.info(`Guest join: Room ${room.name} has ${room.numParticipants} participants`);
+      });
+      
+      const roomExists = rooms.some(room => room.name === roomId);
+      logger.info(`Guest join: Looking for room ${roomId}, exists: ${roomExists}`);
+      
+      if (!roomExists) {
+        logger.info(`Guest join: Room ${roomId} not found in active rooms list`);
+        return res.status(404).json({ error: 'Nest not found or no longer active' });
+      }
+    } catch (error) {
+      logger.error('Error checking room existence in guest endpoint:', error);
+      logger.error('Error details:', { message: error.message, stack: error.stack });
+      return res.status(404).json({ error: 'Nest not found or no longer active' });
+    }
+
+    // Generate guest token (listener only)
+    const guestId = `guest-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const token = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
+      identity: guestId,
+      name: 'Guest',
+      metadata: JSON.stringify({ role: 'guest' }),
+    });
+
+    token.addGrant({
+      room: roomId,
+      roomJoin: true,
+      canPublish: false, // Guests can only listen
+      canSubscribe: true,
+      roomAdmin: false,
+    });
+
+    const jwt = await token.toJwt();
+
+    logger.info(`Guest ${guestId} joined nest ${roomId}`);
+
+    res.json({ token: jwt });
+  } catch (error) {
+    logger.error('Guest join error:', error);
+    res.status(500).json({ error: 'Failed to join nest as guest' });
+  }
+});
+
 // Join existing nest (authenticated)
 app.get('/api/v1/nests/:roomId', requireAuth, async (req, res) => {
   try {
@@ -249,8 +304,14 @@ app.get('/api/v1/nests/:roomId', requireAuth, async (req, res) => {
 
     // Check if room is still active
     try {
-      await roomService.getRoom(roomId);
+      const rooms = await roomService.listRooms();
+      const roomExists = rooms.some(room => room.name === roomId);
+      
+      if (!roomExists) {
+        return res.status(404).json({ error: 'Nest is no longer active' });
+      }
     } catch (error) {
+      logger.error('Error checking room existence:', error);
       return res.status(404).json({ error: 'Nest is no longer active' });
     }
 
@@ -278,7 +339,7 @@ app.get('/api/v1/nests/:roomId', requireAuth, async (req, res) => {
       roomRecord: isHost || isAdmin,
     });
 
-    const jwt = token.toJwt();
+    const jwt = await token.toJwt();
 
     logger.info(`User ${userPubkey} joined nest ${roomId} as ${isHost ? 'host' : isAdmin ? 'admin' : isSpeaker ? 'speaker' : 'listener'}`);
 
@@ -286,45 +347,6 @@ app.get('/api/v1/nests/:roomId', requireAuth, async (req, res) => {
   } catch (error) {
     logger.error('Join nest error:', error);
     res.status(500).json({ error: 'Failed to join nest' });
-  }
-});
-
-// Join nest as guest (no authentication)
-app.get('/api/v1/nests/:roomId/guest', async (req, res) => {
-  try {
-    const { roomId } = req.params;
-
-    // Check if room exists
-    try {
-      await roomService.getRoom(roomId);
-    } catch (error) {
-      return res.status(404).json({ error: 'Nest not found or no longer active' });
-    }
-
-    // Generate guest token (listener only)
-    const guestId = `guest-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const token = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
-      identity: guestId,
-      name: 'Guest',
-      metadata: JSON.stringify({ role: 'guest' }),
-    });
-
-    token.addGrant({
-      room: roomId,
-      roomJoin: true,
-      canPublish: false, // Guests can only listen
-      canSubscribe: true,
-      roomAdmin: false,
-    });
-
-    const jwt = token.toJwt();
-
-    logger.info(`Guest ${guestId} joined nest ${roomId}`);
-
-    res.json({ token: jwt });
-  } catch (error) {
-    logger.error('Guest join error:', error);
-    res.status(500).json({ error: 'Failed to join nest as guest' });
   }
 });
 
@@ -503,45 +525,11 @@ app.post('/api/v1/nests/:roomId/restart', requireAuth, async (req, res) => {
       roomRecord: true,
     });
 
-    logger.info(`Token before toJwt():`, {
-      tokenType: typeof token,
-      hasToJwt: typeof token.toJwt === 'function',
-      tokenProps: Object.getOwnPropertyNames(token),
-      grants: token.grants
-    });
 
-    let jwt;
-    try {
-      // Try sync first, then async
-      jwt = token.toJwt();
-      if (jwt instanceof Promise) {
-        logger.info('toJwt() returned a Promise, awaiting...');
-        jwt = await jwt;
-      }
-      
-      logger.info(`JWT after toJwt():`, {
-        jwtType: typeof jwt,
-        jwtLength: jwt?.length,
-        jwtPreview: typeof jwt === 'string' ? jwt.substring(0, 50) + '...' : jwt
-      });
-      
-      // Validate the JWT is a non-empty string
-      if (typeof jwt !== 'string' || jwt.length === 0) {
-        throw new Error(`Invalid JWT generated: ${typeof jwt}, value: ${jwt}`);
-      }
-    } catch (error) {
-      logger.error(`toJwt() failed:`, error);
-      throw new Error(`Failed to generate JWT: ${error.message}`);
-    }
 
-    logger.info(`JWT generation result:`, {
-      jwtType: typeof jwt,
-      jwtValue: jwt,
-      jwtLength: jwt?.length,
-      jwtPreview: typeof jwt === 'string' ? jwt.substring(0, 50) + '...' : 'Not a string',
-      tokenObject: token,
-      tokenMethods: Object.getOwnPropertyNames(token)
-    });
+    const jwt = await token.toJwt();
+
+
 
     // Update room info in Redis with restart timestamp
     const updatedRoomInfo = {
@@ -560,7 +548,7 @@ app.post('/api/v1/nests/:roomId/restart', requireAuth, async (req, res) => {
 
     logger.info(`Successfully restarted nest ${roomId} for host ${requesterPubkey}`);
 
-    logger.info(`Sending restart response with token type: ${typeof jwt}`);
+
     
     res.json({
       roomId,
