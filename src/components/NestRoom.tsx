@@ -599,7 +599,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
                             <div className="mt-3 p-2 bg-blue-50 dark:bg-blue-950/20 rounded border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300">
                               <p className="text-xs font-medium">Debug Info:</p>
                               <p className="text-xs">Room ID: {roomId}</p>
-                              <p className="text-xs">API Base: {process.env.NODE_ENV === 'production' ? 'https://nostrnests.com/api/v1/nests' : 'http://localhost:5544/api/v1/nests'}</p>
+                              <p className="text-xs">API Base: {import.meta.env.VITE_NESTS_API_URL || (process.env.NODE_ENV === 'production' ? 'https://dev.nostrnests.com/api/v1/nests' : 'http://localhost:5544/api/v1/nests')}</p>
                               <p className="text-xs">Nest found on Nostr: {nest ? 'Yes' : 'No'}</p>
                               <p className="text-xs">LiveKit URL: {liveKitUrl ? 'Found' : 'Missing'}</p>
                               <p className="text-xs">Nest Status: {currentStatus}</p>
