@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu.tsx';
 import { RelaySelector } from '@/components/RelaySelector';
-import { ThemeToggle } from '@/components/ThemeToggle';
+
 import LoginDialog from './LoginDialog';
 import SignupDialog from './SignupDialog';
 import { useLoggedInAccounts } from '@/hooks/useLoggedInAccounts';
@@ -51,7 +51,7 @@ export function LoginArea({ className }: LoginAreaProps) {
             {/* Desktop: Show theme toggle and settings */}
             {!isMobile && (
               <>
-                <ThemeToggle />
+
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
