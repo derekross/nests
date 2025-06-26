@@ -1,0 +1,22 @@
+# Override for production with existing Nginx
+version: '3.8'
+
+services:
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"  # Bind to localhost only
+
+  livekit:
+    ports:
+      - "127.0.0.1:7880:7880"     # WebSocket/HTTP - localhost only
+      - "7881:7881/udp"           # RTC - needs to be public
+      - "50000-50100:50000-50100/udp"  # RTC port range - needs to be public
+
+  nests-api:
+    ports:
+      - "127.0.0.1:5544:5544"  # API - localhost only
+
+  # Disable the nginx service since you have your own
+  nginx:
+    profiles:
+      - disabled

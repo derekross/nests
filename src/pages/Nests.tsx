@@ -125,6 +125,7 @@ export function Nests() {
 
             {/* Desktop navigation */}
             <div className="hidden md:flex items-center gap-3">
+              <ThemeToggle />
               <LoginArea className="max-w-60" />
             </div>
 
