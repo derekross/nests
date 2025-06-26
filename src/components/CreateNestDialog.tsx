@@ -87,7 +87,7 @@ export function CreateNestDialog({ children, onNestCreated }: CreateNestDialogPr
         ['d', response.roomId],
         ['room', data.room],
         ['status', data.status],
-        ['service', import.meta.env.VITE_NESTS_API_URL || (process.env.NODE_ENV === 'production' ? 'https://dev.nostrnests.com/api/v1/nests' : 'http://localhost:5544/api/v1/nests')],
+        ['service', import.meta.env.VITE_NESTS_API_URL || (process.env.NODE_ENV === 'production' ? `https://${window.location.hostname}/api/v1/nests` : 'http://localhost:5544/api/v1/nests')],
         ['p', user.pubkey, '', 'Host'],
       ];
 

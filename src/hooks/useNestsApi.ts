@@ -82,11 +82,24 @@ interface DebugInfo {
   authError?: string;
 }
 
-const NESTS_API_BASE = import.meta.env.VITE_NESTS_API_URL || (
-  process.env.NODE_ENV === 'production' 
-    ? 'https://dev.nostrnests.com/api/v1/nests'
-    : 'http://localhost:5544/api/v1/nests'
-);
+// Auto-detect API URL based on current domain or use environment variable
+const getApiBaseUrl = () => {
+  // First check for explicit environment variable
+  if (import.meta.env.VITE_NESTS_API_URL) {
+    return import.meta.env.VITE_NESTS_API_URL;
+  }
+  
+  // Auto-detect based on current domain in production
+  if (process.env.NODE_ENV === 'production') {
+    const currentDomain = window.location.hostname;
+    return `https://${currentDomain}/api/v1/nests`;
+  }
+  
+  // Development fallback
+  return 'http://localhost:5544/api/v1/nests';
+};
+
+const NESTS_API_BASE = getApiBaseUrl();
 
 /**
  * Hook for creating a new nest

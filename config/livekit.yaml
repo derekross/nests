@@ -16,7 +16,7 @@ redis:
 
 # API keys for authentication
 keys:
-  nests-api-key: nests-super-secret-key-change-in-production
+  nests-prod-api-key: key goes here
 
 # Room configuration
 room:

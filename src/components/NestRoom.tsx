@@ -112,12 +112,20 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
   // Check if current user is the host
   const isHost = user && nest && nest.pubkey === user.pubkey;
 
-  // Find LiveKit URL and convert for local development
+  // Find LiveKit URL and convert based on environment
   const rawLiveKitUrl = streamingUrls.find(url => url.startsWith('wss+livekit://'));
   const liveKitUrl = rawLiveKitUrl 
-    ? rawLiveKitUrl
-        .replace('wss+livekit://', 'ws://') // Use ws:// for local dev
-        .replace('livekit:7880', 'localhost:7880') // Use localhost instead of container name
+    ? (() => {
+        if (process.env.NODE_ENV === 'production') {
+          // In production, use the current domain with /livekit/ path (proxied by Nginx)
+          return `wss://${window.location.hostname}/livekit`;
+        } else {
+          // In development, connect directly to localhost
+          return rawLiveKitUrl
+            .replace('wss+livekit://', 'ws://')
+            .replace('livekit:7880', 'localhost:7880');
+        }
+      })()
     : undefined;
   
   console.log('LiveKit URL conversion:', {
@@ -599,7 +607,7 @@ export function NestRoom({ nestNaddr, onLeave }: NestRoomProps) {
                             <div className="mt-3 p-2 bg-blue-50 dark:bg-blue-950/20 rounded border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300">
                               <p className="text-xs font-medium">Debug Info:</p>
                               <p className="text-xs">Room ID: {roomId}</p>
-                              <p className="text-xs">API Base: {import.meta.env.VITE_NESTS_API_URL || (process.env.NODE_ENV === 'production' ? 'https://dev.nostrnests.com/api/v1/nests' : 'http://localhost:5544/api/v1/nests')}</p>
+                              <p className="text-xs">API Base: {import.meta.env.VITE_NESTS_API_URL || (process.env.NODE_ENV === 'production' ? `https://${window.location.hostname}/api/v1/nests` : 'http://localhost:5544/api/v1/nests')}</p>
                               <p className="text-xs">Nest found on Nostr: {nest ? 'Yes' : 'No'}</p>
                               <p className="text-xs">LiveKit URL: {liveKitUrl ? 'Found' : 'Missing'}</p>
                               <p className="text-xs">Nest Status: {currentStatus}</p>
